@@ -1,0 +1,15 @@
+name: Chore
+description: 維護工作：依賴、設定、重構、CI
+labels: ["kind:chore"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 內容
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 完成條件
+      value: "- [ ] "

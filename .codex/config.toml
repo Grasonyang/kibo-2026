@@ -1,0 +1,24 @@
+# Codex 日常模型與三角色登記；共同流程見 docs/agents/workflow.md。
+model = "gpt-6.1-sol"
+model_reasoning_effort = "medium"
+
+[features]
+multi_agent = true
+
+[agents]
+max_threads = 2
+default_subagent_model = "gpt-6-luna"
+default_subagent_reasoning_effort = "xhigh"
+max_depth = 2
+
+[agents.planner]
+description = "釐清需求、形成規格與 tickets；不修改產品程式碼。"
+config_file = "agents/planner.toml"
+
+[agents.worker]
+description = "完成單一 ticket 的實作、測試、文件與整合。"
+config_file = "agents/worker.toml"
+
+[agents.reviewer]
+description = "唯讀獨立審查 Standards 或 Spec，回報具體問題。"
+config_file = "agents/reviewer.toml"

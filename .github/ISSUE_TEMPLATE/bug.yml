@@ -1,0 +1,27 @@
+name: Bug
+description: 回報非預期的行為
+labels: ["kind:bug", "needs-triage"]
+body:
+  - type: textarea
+    id: actual
+    attributes:
+      label: 實際發生的事
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 預期應該發生的事
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 重現步驟
+      description: 能讓它變紅的最短指令或步驟（diagnosing-bugs 需要這個回饋迴圈）
+      value: "1. \n2. "
+  - type: textarea
+    id: env
+    attributes:
+      label: 環境
+      description: 版本、作業系統、相關設定

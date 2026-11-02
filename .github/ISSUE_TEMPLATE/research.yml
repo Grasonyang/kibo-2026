@@ -1,0 +1,24 @@
+name: Research
+description: 查證與調查，成果是有引用的筆記
+labels: ["kind:research"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 要回答的問題
+    validations:
+      required: true
+  - type: textarea
+    id: known
+    attributes:
+      label: 已知的背景
+  - type: textarea
+    id: sources
+    attributes:
+      label: 來源要求
+      description: 只接受哪類來源（官方文件、論文、原始碼等）
+  - type: input
+    id: output
+    attributes:
+      label: 成果放哪裡
+      placeholder: docs/notes/<主題>.md

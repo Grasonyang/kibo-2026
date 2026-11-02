@@ -1,0 +1,36 @@
+[project]
+name = "kibo-rpc"
+version = "0.0.0"
+description = "7th Kibo Robot Programming Challenge: Int-Ball2 mission logic"
+requires-python = ">=3.8"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=8.3.5",
+    "ruff>=0.17.3",
+    "vermin>=1.9.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py37"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# UP 系列會把語法升到 3.7 以後，執行環境是 3.6，所以不啟用。
+select = ["E", "F", "I", "B"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src"]
+pythonVersion = "3.8"
+typeCheckingMode = "standard"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

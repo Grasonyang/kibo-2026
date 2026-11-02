@@ -1,0 +1,33 @@
+name: Spec
+description: to-spec 產出的規格
+labels: ["kind:spec"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solution
+    validations:
+      required: true
+  - type: textarea
+    id: stories
+    attributes:
+      label: User Stories
+      value: "1. As a <角色>, I want <功能>, so that <好處>"
+  - type: textarea
+    id: impl
+    attributes:
+      label: Implementation Decisions
+  - type: textarea
+    id: testing
+    attributes:
+      label: Testing Decisions
+  - type: textarea
+    id: scope
+    attributes:
+      label: Out of Scope

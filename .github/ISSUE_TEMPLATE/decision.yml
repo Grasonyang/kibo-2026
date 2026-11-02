@@ -1,0 +1,30 @@
+name: Decision
+description: 需要定案的決策（wayfinder 決策 ticket 或 ADR 候選）
+labels: ["kind:decision"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 要決定什麼
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: 選項與取捨
+      description: 至少兩個說得通的選項，各自的代價
+    validations:
+      required: true
+  - type: dropdown
+    id: door
+    attributes:
+      label: 可逆性
+      options:
+        - 雙向門（可以回頭）
+        - 單向門（難以回頭）
+    validations:
+      required: true
+  - type: textarea
+    id: lean
+    attributes:
+      label: 目前傾向與理由

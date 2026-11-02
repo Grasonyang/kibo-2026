@@ -1,0 +1,30 @@
+name: Task
+description: 一張可獨立完成的 tracer-bullet ticket
+labels: ["kind:task"]
+body:
+  - type: input
+    id: parent
+    attributes:
+      label: Parent
+      description: 上層 spec 或 issue 的編號（沒有就留空）
+      placeholder: "#12"
+  - type: textarea
+    id: what
+    attributes:
+      label: What to build
+      description: 從使用者角度描述做完後能做到什麼，不要列逐層的實作清單，也不要寫會過期的檔案路徑。
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      value: "- [ ] \n- [ ] "
+    validations:
+      required: true
+  - type: textarea
+    id: blocked
+    attributes:
+      label: Blocked by
+      description: 建立後請用原生依賴（blocked by）連結，這裡只是備註。沒有就寫 None。
+      value: None (can start immediately)

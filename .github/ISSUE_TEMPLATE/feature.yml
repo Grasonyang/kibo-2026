@@ -1,0 +1,15 @@
+name: Feature
+description: 新功能或改進的想法
+labels: ["kind:feature", "needs-triage"]
+body:
+  - type: textarea
+    id: want
+    attributes:
+      label: 想要什麼
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 為什麼需要
+      description: 現在遇到什麼問題、誰會受益

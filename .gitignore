@@ -1,0 +1,25 @@
+# worktree（每個改動一個，見 docs/agents/delivery.md）
+.claude/worktrees/
+.claude/settings.local.json
+
+# 機密
+.env
+.env.*
+!.env.example
+
+# 雜項
+.DS_Store
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# 官方模擬器與其產物（來自 JAXA，不進版控；取得方式見 docs/kibo/simulator.md）
+sim/
+dist/
+*.tar.gz
+
+# 官方 PDF（散布權未確認；放在 docs/reference/ 本機使用）
+docs/reference/*.pdf
