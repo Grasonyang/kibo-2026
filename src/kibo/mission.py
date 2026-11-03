@@ -18,7 +18,8 @@ from typing import Dict, List, NamedTuple, Optional
 from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
-from kibo.judge import Judgement, Pose, judge, target_attitude
+from kibo.geometry import Vec3
+from kibo.judge import CAMERA_OFFSET, Judgement, Pose, judge, target_attitude
 
 MOVE_SUCCESS = "success"
 MOVE_TIMEOUT = "timeout"
@@ -83,6 +84,7 @@ class MissionConfig(NamedTuple):
     checkpoints_attempts: int = 3
     checkpoints_retry_sec: float = 1.0
     pose_attempts: int = 5
+    camera_offset_m: Vec3 = CAMERA_OFFSET  # 對中用相機位置；伺服器若用機體中心就設成 (0, 0, 0)
 
 
 DEFAULT_MISSION = MissionConfig()
@@ -178,7 +180,7 @@ class _Run:
             pose = self.current_pose()
             if pose is None:
                 return Settled(None, False)
-            last = judge(pose, cp)
+            last = judge(pose, cp, self.cfg.camera_offset_m)
             streak = streak + 1 if last.level >= self.required_level() else 0
             if streak >= self.cfg.settle_samples:
                 return Settled(last, True)

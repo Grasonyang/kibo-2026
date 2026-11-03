@@ -66,10 +66,11 @@
 
 ```bash
 uv sync --locked                                  # 第一次：裝工具
-uv run pytest                                     # 55 個測試，約 0.3 秒
+uv run pytest                                     # 60 個測試，約 0.3 秒
 uv run python -m kibo.simulate --runs 10 --checkpoints 8        # 本機「資格賽」
 uv run python -m kibo.simulate --runs 1 --checkpoints 6 -v      # 看一場的逐步 log
 uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08   # 刁難它
+uv run python -m kibo.tune --runs 20 --checkpoints 10                   # 比較幾組參數的平均與最低分
 ```
 
 一場的 log 長這樣（`-v`），每行開頭是剩餘秒數：
@@ -102,7 +103,8 @@ uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08
 | IB2 速度 0.1 m/s、轉速 15°/s | `planner.Speeds` | 看模擬器 log 每段移動花幾秒 |
 | 每點穩定 8 秒、終點保險 25 秒 | `budget.BudgetConfig` | 同上 |
 | Lv3/2/1 = 10/6/3 分、Goal 20 分、倍率線性 1 到 2 | `scoring.py` | Web 模擬器的結果 JSON |
-| 對中用「相機位置」算（相機在機頭前 14 cm） | `judge.py` | 比較我們 log 的 Lv 與結果 JSON 的 level |
+| 對中用「相機位置」算（相機在機頭前 14 cm） | `judge.py`，開關在 `MissionConfig.camera_offset_m` | 比較我們 log 的 Lv 與結果 JSON 的 level |
+| ArUco 字典是 `DICT_4X4_50` | `vision.py` | 手冊只說 4x4；看範本或模擬器影像 |
 | CheckPoint 離 marker 0.4 到 0.7 m、偏法線 ≤ 20° | `scenarios.py` | 看幾場真實的 `cheat_sheet.json` |
 | **放棄中途點後，到 Goal 仍有 Goal 分數**（規則書附錄 #20 字面是「passes all CheckPoints」） | `budget.py` | 故意漏一點，看結果 JSON 的 `goal.success` |
 | 計時起點 = `/ib2_user/start` 到來的時刻（規則說是 Release 完成） | `mission.py` 的 `t0` | 比對結果 JSON 的 `duration_sec` 與我們 log 的 elapsed |
@@ -116,5 +118,5 @@ uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08
 ## 6. 還沒做的
 
 - ROS 接線層沒跑過（沒有模擬器）。第一次跑要核對的事列在 [ros/README.md](../../ros/README.md)。
-- 相機影像完全沒用到：第一版只靠導航資料。用相機微調是第二版主線，見 [ideas.md](ideas.md)。
+- 相機影像還沒接進任務流程：第一版只靠導航資料。看 marker 算相對位置的模組已做好並用合成影像測過（`src/kibo/vision.py`），接進 `Robot` 介面是第二版主線，見 [ideas.md](ideas.md)。
 - 更多點子與取捨：[ideas.md](ideas.md)。規格：[spec.md](spec.md)。進度：[tickets.md](tickets.md)。

@@ -4,8 +4,8 @@
 真正給分的是伺服器；這裡的目的是不要送早，也不要在明明到了的時候還在等。
 
 假設（拿到模擬器後要核對）：
-- 「對中」用相機位置算。相機在機頭前方 0.14 m（手冊 5.13.2）。0.5 m 外的差別很小，
-  但既然手冊給了就用。
+- 「對中」用相機位置算。相機在機頭前方 0.14 m（手冊 5.13.2）。若模擬器顯示伺服器是用
+  機體中心算，把 `camera_offset` 傳 `(0, 0, 0)` 即可（`MissionConfig.camera_offset_m`）。
 """
 
 from typing import List, NamedTuple
@@ -56,8 +56,8 @@ def level_for(value: float, bands: List[Band]) -> int:
     return 0
 
 
-def camera_position(pose: Pose) -> Vec3:
-    return add(pose.position, rotate(pose.orientation, CAMERA_OFFSET))
+def camera_position(pose: Pose, camera_offset: Vec3 = CAMERA_OFFSET) -> Vec3:
+    return add(pose.position, rotate(pose.orientation, camera_offset))
 
 
 def target_attitude(checkpoint: Checkpoint) -> Quat:
@@ -77,9 +77,9 @@ def target_attitude(checkpoint: Checkpoint) -> Quat:
     return look_at(checkpoint.position, checkpoint.marker_position, reference=checkpoint.attitude)
 
 
-def judge(pose: Pose, checkpoint: Checkpoint) -> Judgement:
+def judge(pose: Pose, checkpoint: Checkpoint, camera_offset: Vec3 = CAMERA_OFFSET) -> Judgement:
     dist = distance(pose.position, checkpoint.position)
-    to_marker = sub(checkpoint.marker_position, camera_position(pose))
+    to_marker = sub(checkpoint.marker_position, camera_position(pose, camera_offset))
     centering = angle_between(forward(pose.orientation), to_marker)
     roll = roll_error(pose.orientation, checkpoint.attitude)
 

@@ -13,7 +13,7 @@
 
 - 不用 3.7 以後的語法或標準庫：`dataclasses`、`from __future__ import annotations`、`:=`、位置專用參數（`/`）、`list[int]` 這類內建泛型、`typing.Literal`／`Protocol`／`TypedDict`、`functools.cached_property`。
 - 資料型別用 `typing.NamedTuple`（類別語法在 3.6.1 起可用）或一般 class。
-- 第三方套件以 Melodic 映像內已有的為準（rospy、numpy、OpenCV 3.3.1、cv_bridge）；本機要用其他套件，先確認映像裡有，否則不要用。
+- 第三方套件以 Melodic 映像內已有的為準（rospy、numpy、OpenCV 3.3.1、cv_bridge）；本機要用其他套件，先確認映像裡有，否則不要用。本機的 `opencv-contrib-python-headless` 是 5.x，只當開發依賴；`vision.py` 同時支援 3.x 與 4.7+ 的 ArUco API，cv2 延後 import。
 - `vermin` 會檢查 `src/` 需要的最低 Python 版本，目標 3.6，是「驗證指令」的一部分。它是靜態推測，**最終仍以本機模擬器（Docker 內的 3.6.9）為準**。
 
 ## 共通原則
