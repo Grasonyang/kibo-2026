@@ -1,0 +1,66 @@
+"""本機的「資格賽」：跑很多場隨機場景，印出每場與平均的估計分數。
+
+    uv run python -m kibo.simulate --runs 10 --checkpoints 8
+    uv run python -m kibo.simulate --runs 10 --checkpoints 12 --fail 0.2 --noise 0.08 -v
+
+分數是假裁判算的，只能相對比較策略，不能當真實成績。
+"""
+
+import argparse
+import sys
+from typing import List
+
+from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from kibo.mission import DEFAULT_MISSION, MissionConfig, run_mission
+from kibo.scenarios import random_checkpoints_message
+
+
+def run_once(seed: int, count: int, robot_cfg: FakeRobotConfig, mission_cfg: MissionConfig):
+    robot = FakeRobot(random_checkpoints_message(count, seed), robot_cfg, seed)
+    report = run_mission(robot, mission_cfg)
+    return robot, report
+
+
+def main(argv: List[str]) -> int:
+    parser = argparse.ArgumentParser(description="本機的資格賽：跑隨機場景，印出估計分數。")
+    parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--checkpoints", type=int, default=8, help="含 Goal，規則是 6 到 12")
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--noise", type=float, default=0.03, help="到點位置誤差標準差（公尺）")
+    parser.add_argument("--fail", type=float, default=0.0, help="每次移動失敗的機率")
+    parser.add_argument("--speed", type=float, default=0.12, help="假機器人的真實線速度（m/s）")
+    parser.add_argument("-v", "--verbose", action="store_true", help="印出每場的 log")
+    args = parser.parse_args(argv)
+
+    base = FakeRobotConfig()
+    robot_cfg = base._replace(
+        position_noise_m=args.noise,
+        move_fail_prob=args.fail,
+        speeds=base.speeds._replace(linear_mps=args.speed),
+    )
+    scores = []
+    for i in range(args.runs):
+        robot, report = run_once(args.seed + i, args.checkpoints, robot_cfg, DEFAULT_MISSION)
+        score = robot.score()
+        scores.append(score)
+        print(
+            "run %2d: score %6.1f  levels %s  dropped %s  goal %s  finished at %5.1fs%s"
+            % (
+                i + 1,
+                score,
+                robot.passed_levels,
+                report.dropped,
+                "yes" if report.goal_reached else "NO",
+                report.elapsed_sec,
+                "  aborted: " + report.aborted if report.aborted else "",
+            )
+        )
+        if args.verbose:
+            for line in robot.logs:
+                print("    " + line)
+    print("mean score over %d runs: %.1f" % (len(scores), sum(scores) / len(scores)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
