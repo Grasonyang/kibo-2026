@@ -18,8 +18,9 @@ from typing import Dict, List, NamedTuple, Optional
 from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
-from kibo.geometry import Vec3, norm
+from kibo.geometry import Vec3, distance, norm
 from kibo.judge import CAMERA_OFFSET, Judgement, Pose, judge, target_attitude
+from kibo.planner import Speeds, leg_seconds
 from kibo.vision import body_correction, expected_marker_in_body
 
 MOVE_SUCCESS = "success"
@@ -95,6 +96,10 @@ class MissionConfig(NamedTuple):
     pose_attempts: int = 5
     camera_offset_m: Vec3 = CAMERA_OFFSET  # 對中用相機位置；伺服器若用機體中心就設成 (0, 0, 0)
     camera_fix_max_m: float = 0.3  # 相機算出的修正量超過這個就不信它，改用絕對移動
+    calibrate_speed: bool = True  # 用實測的移動速度修正時間預算（只往慢的方向）
+    min_speed_ratio: float = 0.5  # 校正後的速度不低於預設的這個比例
+    calibrate_below_ratio: float = 0.8  # 實測比預設慢超過這個比例才校正；實測含起停，略慢是正常
+    calibrate_min_leg_m: float = 1.0  # 只用這麼長以上的腿校正；短腿的秒數被起停吃掉，不反映速度
 
 
 DEFAULT_MISSION = MissionConfig()
@@ -138,6 +143,9 @@ class _Run:
         self.visits: List[Visit] = []
         self.dropped: List[int] = []
         self.last_pose: Optional[Pose] = None
+        self.speeds: Speeds = config.budget.speeds  # 會被實測往慢的方向修
+        self.predicted_sec = 0.0  # 長腿的模型預測秒數累積
+        self.actual_sec = 0.0  # 同一批腿的實際秒數累積
 
     def elapsed(self) -> float:
         return self.robot.now() - self.t0
@@ -175,8 +183,50 @@ class _Run:
     def required_level(self) -> int:
         return 1 if self.remaining() < self.cfg.hurry_sec else self.cfg.target_level
 
-    def move_timeout(self) -> float:
-        return max(5.0, min(self.cfg.move_timeout_sec, self.remaining()))
+    def move_timeout(self, target: Optional[Pose] = None) -> float:
+        """至少 move_timeout_sec，長腿放大到估計秒數的兩倍，但不能超過剩餘時間。"""
+        timeout = self.cfg.move_timeout_sec
+        if target is not None and self.last_pose is not None:
+            estimate = leg_seconds(
+                self.last_pose.position,
+                self.last_pose.orientation,
+                target.position,
+                target.orientation,
+                self.speeds,
+            )
+            timeout = max(timeout, 2.0 * estimate)
+        return max(5.0, min(timeout, self.remaining()))
+
+    def record_leg(self, start: Optional[Pose], target: Pose, seconds: float) -> None:
+        """一段成功的移動：記錄距離與秒數，必要時把規劃用的速度往慢修。
+
+        比的是「模型預測的秒數」對「實際秒數」，所以轉向多的腿不會被誤判成飛得慢。
+        實際比預測慢超過死區才動，而且只往慢修、不低於預設的一半；短腿不算，
+        因為起停時間會把它的秒數撐大。
+        """
+        if start is None or seconds <= 0.0:
+            return
+        metres = distance(start.position, target.position)
+        default = self.cfg.budget.speeds
+        predicted = leg_seconds(
+            start.position, start.orientation, target.position, target.orientation, default
+        )
+        self.log("leg: %.2fm in %.1fs (model %.1fs)" % (metres, seconds, predicted))
+        if not self.cfg.calibrate_speed or metres < self.cfg.calibrate_min_leg_m:
+            return
+        self.predicted_sec += predicted
+        self.actual_sec += seconds
+        slowdown = self.actual_sec / max(self.predicted_sec, 1e-6)
+        if slowdown <= 1.0 / self.cfg.calibrate_below_ratio:
+            return
+        slowdown = min(slowdown, 1.0 / self.cfg.min_speed_ratio)
+        calibrated = Speeds(default.linear_mps / slowdown, default.angular_dps / slowdown)
+        if calibrated.linear_mps < self.speeds.linear_mps:
+            self.log(
+                "speed calibrated: %.3f -> %.3f m/s (x%.2f slower than model)"
+                % (self.speeds.linear_mps, calibrated.linear_mps, slowdown)
+            )
+            self.speeds = calibrated
 
     def settle(self, cp: Checkpoint) -> Settled:
         """等到連續幾次自我判定都達標（stable=True），或逾時（回傳最後一次判定）。"""
@@ -202,9 +252,11 @@ class _Run:
         for attempt in range(attempts):
             if self.robot.stop_requested():
                 return False
-            result = self.robot.move_to(target, self.move_timeout())
+            start, started_at = self.last_pose, self.robot.now()
+            result = self.robot.move_to(target, self.move_timeout(target))
             self.log("move to #%d attempt %d: %s" % (cp.id, attempt + 1, result))
             if result == MOVE_SUCCESS:
+                self.record_leg(start, target, self.robot.now() - started_at)
                 return True
             if result == MOVE_INVALID:
                 return False  # 再試也不會變合法
@@ -309,7 +361,12 @@ def _fly(run: "_Run", robot: Robot, config: MissionConfig):
             return goal_reached, "stop requested"
         here = run.current_pose() or run.last_pose or Pose(cps.goal.position, cps.goal.attitude)
         plan = plan_within_budget(
-            here.position, here.orientation, pending, cps.goal, run.remaining(), config.budget
+            here.position,
+            here.orientation,
+            pending,
+            cps.goal,
+            run.remaining(),
+            config.budget._replace(speeds=run.speeds),
         )
         if plan.dropped:
             run.log("dropping %s to protect the goal" % plan.dropped)
