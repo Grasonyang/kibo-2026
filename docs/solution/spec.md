@@ -44,6 +44,9 @@
 - **到點判定（本機）**：以 nav 的實際姿態算三項指標與對應的 Lv。連續 5 次取樣（間隔 0.25 秒，涵蓋規則要求的 1 秒）都達到目標 Lv 才算**穩定**；目標 Lv 預設 3，剩餘時間少於 40 秒降到 1。穩定就回報。沒穩定（逾時 6 秒）時用**最後一次**判定：有時間就再移動一次（只一次）再穩定；最後一次判定至少 Lv1 仍回報（伺服器才是裁判，不回報一定 0 分），並在紀錄標 unstable；整段期間都沒有導航資料就不回報，因為不知道自己在哪。
 - **時間預算**：`TIME_LIMIT_SEC = 300`，保留固定安全餘裕（預設 25 秒）給 Goal 與回報。每個 leg 的估計時間 = 距離 ÷ 速度 + 轉角 ÷ 角速度 + 穩定時間（8 秒）。來不及時刪「拿掉它省最多秒」的點（各點分數相同，所以等價於分數 ÷ 時間），刪到來得及為止；Goal 永不刪。**假設**：刪掉中途點後到達 Goal 仍有 Goal 分數；規則書附錄 #20 字面是「passes all CheckPoints」，第一次模擬器要驗。
 - **時間起點**：t0 取 `/ib2_user/start` 到來的時刻。規則書說計時從 Release 完成起算；若 start 比 Release 晚，剩餘時間會被高估，待模擬器用結果 JSON 的 `duration_sec` 校正；校正前不把 `margin_sec` 往下調。
+- **不死保底（council R1）**：清單解析能救就救（單點壞跳過、count 不符以實際為準、Goal 不在清單用最後一點、缺 attitude 自己算）；超過 11 個中途點改最近鄰；任何例外都走到 `mission_finish`。
+- **速度線上校正（council R2）**：只用 ≥ 1 m 的腿，比較模型預測秒數與實際秒數，慢超過 25% 才把線速度與角速度同比例調慢，上限 2 倍、只往慢修。`move_timeout` 取 60 s 與估計腿兩倍的較大者。
+- **探針旗標（council R4）**：`notify_even_if_level0`、`skip_one_waypoint`、`deliberate_late_after` 預設關，只在資格賽模擬器上定規則世界用。settle 只計 stamp 變新的導航樣本；沒有成功移動不回報（手冊 6.5）。
 - **任務狀態機**：`PLAN → MOVE → SETTLE →（REFINE）→ NOTIFY →（下一點）→ GOAL → FINISH`，失敗分支有重試上限：移動每點最多嘗試 2 次（`MOVE_INVALID` 不重試）、回報最多 2 次、取清單最多 3 次。狀態機不呼叫 ROS，只呼叫 `Robot` 介面。
 - **`Robot` 介面**（抽象類別）：八個必要方法 `now`、`pose`（沒資料回 None）、`move_to(pose, timeout) -> 字串常數 MOVE_SUCCESS/TIMEOUT/ABORTED/INVALID`、`sleep`、`mission_start`、`get_checkpoints_message`、`notify_checkpoint`、`mission_finish`，加兩個選用 `stop_requested`、`log`。ROS 版與假機器人版各實作一次。ROS 版的服務呼叫放在 daemon thread 裡用 Event 等，因為 `ServiceProxy` 本身沒有逾時。
 - **假機器人**：等速直線加等角速度轉動的簡化模型，可注入位置雜訊與偶發失敗，並依 bands 判 Lv 算分，讓策略比較有數字可看。它不是物理模擬，分數只能做相對比較。

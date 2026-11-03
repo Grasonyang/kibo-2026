@@ -66,11 +66,12 @@
 
 ```bash
 uv sync --locked                                  # 第一次：裝工具
-uv run pytest                                     # 63 個測試，約 0.3 秒
+uv run pytest                                     # 85 個測試，約 1.3 秒
 uv run python -m kibo.simulate --runs 10 --checkpoints 8        # 本機「資格賽」
 uv run python -m kibo.simulate --runs 1 --checkpoints 6 -v      # 看一場的逐步 log
 uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08   # 刁難它
-uv run python -m kibo.tune --runs 20 --checkpoints 10                   # 比較幾組參數的平均與最低分，有無相機各一表
+uv run python -m kibo.tune --runs 20 --checkpoints 10                   # 四個規則世界的平均與最大後悔，有無相機各一表
+uv run python -m kibo.tune --runs 20 --checkpoints 12 --speed 0.05      # 真速只有一半時，看哪個變體撐得住
 uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera   # 開假相機
 ```
 
@@ -95,29 +96,46 @@ uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera  
 要跑**真的**模擬器，需要 JAXA 的開發資源包（隊伍帳號登入下載），步驟在
 [docs/kibo/simulator.md](../kibo/simulator.md)。
 
-## 5. 哪些數字是猜的
+## 5. 哪些數字是猜的，哪些結論站得住
 
 這些都是「拿到模擬器就要校正」的假設，集中列出來免得被當成事實：
 
 | 假設 | 在哪 | 怎麼校正 |
 |---|---|---|
-| IB2 速度 0.1 m/s、轉速 15°/s | `planner.Speeds` | 看模擬器 log 每段移動花幾秒 |
+| IB2 速度 0.1 m/s、轉速 15°/s | `planner.Speeds` | 看 log 每段 `leg:` 的實際秒數對模型；程式會自動往慢修，但預設值要改 |
 | 每點穩定 8 秒、終點保險 25 秒 | `budget.BudgetConfig` | 同上 |
-| Lv3/2/1 = 10/6/3 分、Goal 20 分、倍率線性 1 到 2 | `scoring.py` | Web 模擬器的結果 JSON |
-| 對中用「相機位置」算（相機在機頭前 14 cm） | `judge.py`，開關在 `MissionConfig.camera_offset_m` | 比較我們 log 的 Lv 與結果 JSON 的 level |
-| ArUco 字典是 `DICT_4X4_50` | `vision.py` | 手冊只說 4x4；看範本或模擬器影像 |
-| CheckPoint 離 marker 0.4 到 0.7 m、偏法線 ≤ 20° | `scenarios.py` | 看幾場真實的 `cheat_sheet.json` |
-| **放棄中途點後，到 Goal 仍有 Goal 分數**（規則書附錄 #20 字面是「passes all CheckPoints」） | `budget.py` | 故意漏一點，看結果 JSON 的 `goal.success` |
-| 計時起點 = `/ib2_user/start` 到來的時刻（規則說是 Release 完成） | `mission.py` 的 `t0` | 比對結果 JSON 的 `duration_sec` 與我們 log 的 elapsed |
+| Lv3/2/1 = 10/6/3 分、Goal 20 分、倍率線性 1 到 2 | `scoring.py` | Web 模擬器的結果 JSON；規則書引用的分數表不在 PDF 裡 |
+| **Goal 分數要不要求通過全部 CheckPoint**（A／B） | `scoring.Scoring.goal_requires_all` | 探針：故意漏一點看 `goal.success` |
+| **逾時會不會把已得分歸零**（T0／T1） | `scoring.Scoring.timeout_keeps_points` | 探針：故意逾時 |
+| 對中用「相機位置」算（相機在機頭前 14 cm）；手冊 6.3.1 的字面是「from the vehicle」 | `judge.py`，開關 `MissionConfig.camera_offset_m` | 比較 log 的 Lv 與結果 JSON 的 level |
+| 計時起點 = `/ib2_user/start` 到來的時刻（規則說是 Release 完成） | `mission.py` 的 `t0` | 比對結果 JSON 的 `duration_sec` |
+| CheckPoint 離 marker 0.4 到 0.7 m、偏法線 ≤ 20°；一場 6 到 12 點都要去 | `scenarios.py` | `cheat_sheet.json`；手冊 4.3.1 有「N/A 不評分」的點 |
+| ArUco 字典 `DICT_4X4_50` | `vision.py` | 範本或模擬器影像 |
+| Goal 在 CheckPoint 清單裡、id 就是 marker 編號 | `checkpoints.py`（不在也會降級飛完） | `cheat_sheet.json` |
 
 一個已經確定的事：手冊給的範例姿態，用我們的算法算出來「正對 marker、誤差 0.0°」，
 所以座標與四元數的慣例是對的（`tests/test_geometry.py`）。
 
+### 假模型跑出來的結論，哪些能信
+
+假機器人不是物理，所以每個結論都要問「換一個規則世界、換一個真實速度，名次還一樣嗎」。
+`python -m kibo.tune` 把四個規則世界（Goal 需不需要全點 × 逾時保不保留分數）並排印出來，
+並算「最大後悔」（在最不利的世界裡比最好的變體差幾分）。
+
+| 結論 | 跨世界、跨速度都成立？ | 說明 |
+|---|---|---|
+| **速度猜錯時，線上校正是最大的單一改善** | 是 | 真速只有一半時：不校正平均 27–57 分、Goal 10–14/20；校正後 75–89 分、Goal 19–20/20；速度猜對時零影響 |
+| **刪點保 Goal 是最不會後悔的選擇** | 是 | 四世界裡只在「Goal 需全點且逾時保留分」小輸 2–6 分，其餘大勝（council 主席重現） |
+| 相機修正有幫助 | **fake-sensitive** | 只在相對移動幾乎無誤差時成立；相對移動加 5 cm 雜訊，增益就消失 |
+| 只求 Lv2 比追 Lv3 好 | **fake-sensitive** | 取決於真實的 Lv 分數比與到點誤差，兩者都沒公布 |
+| 保險、穩定估值、趕時間門檻怎麼調 | **分不出來** | 差異 ≤ 10 分，小於資格賽 10 次平均的標準誤；拿到真資料前不調 |
+
 一個值得知道的發現：相機在機頭前 14 cm，marker 只離 50 cm，所以**側向偏 15 cm 就會讓
-對中掉到 Lv1**。位置要準，而且沿視線方向偏比側向偏好。
+對中掉到 Lv1**（若伺服器也用相機位置算）。位置要準，而且沿視線方向偏比側向偏好。
 
 ## 6. 還沒做的
 
 - ROS 接線層沒跑過（沒有模擬器）。第一次跑要核對的事列在 [ros/README.md](../../ros/README.md)。
 - 相機修正已接進流程但 ROS 端沒測過：主流程靠導航資料，只有「到了但不穩」時才用相機看 marker 修正幾公分（`src/kibo/vision.py`，合成影像測過）。假機器人可用 `--camera` 開假相機。
-- 更多點子與取捨：[ideas.md](ideas.md)。規格：[spec.md](spec.md)。進度：[tickets.md](tickets.md)。這一輪的回顧：[retro.md](retro.md)。
+- 更多點子與取捨：[ideas.md](ideas.md)。規格：[spec.md](spec.md)。進度：[tickets.md](tickets.md)。第一輪的回顧：[retro.md](retro.md)。
+- 第一版結案後開了一場 council（四位委員兩輪匿名互評，主席查證）：[notes/council/v1-review/synthesis.md](../../notes/council/v1-review/synthesis.md)，裁決 R1–R6 已實作（T14–T18），待使用者確認。
