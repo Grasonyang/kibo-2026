@@ -27,3 +27,5 @@
 | T16 | R3 規則世界旗標與 tune 的四世界／最大後悔表；README 第 5 節只留跨世界穩定的結論 | tune 印四世界；README 啟示逐條標 fake-sensitive 或移除 | done |
 | T17 | R4 校準與飛行記錄：log 欄位、探針旗標（預設關）、settle 只計新 stamp、沒成功移動不回報、ROS `_call` 用 rospy 時間 | 單場 log 能算速度與 settle 秒數；重複樣本不算穩定；旗標跑通 | done（ROS 端未測） |
 | T18 | R5 上機劇本改寫 ros/README | 文件 | done |
+| T19 | 兩軸 reviewer 審 T14–T18 後修正（校正不棘輪、逾時當證據、R4 欄位補齊、探針護欄、測試 85→97） | 審查無 blocker；矩陣仍達標 | done |
+| T20 | phase2-review council：survey 隔離、相機預設關、POC 提問清單、劇本更新、凍結建議 | `notes/council/phase2-review/synthesis.md` | done（P5 凍結待確認） |

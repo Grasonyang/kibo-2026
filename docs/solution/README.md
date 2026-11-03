@@ -66,7 +66,7 @@
 
 ```bash
 uv sync --locked                                  # 第一次：裝工具
-uv run pytest                                     # 85 個測試，約 1.3 秒
+uv run pytest                                     # 98 個測試，約 0.5 秒
 uv run python -m kibo.simulate --runs 10 --checkpoints 8        # 本機「資格賽」
 uv run python -m kibo.simulate --runs 1 --checkpoints 6 -v      # 看一場的逐步 log
 uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08   # 刁難它
