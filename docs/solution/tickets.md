@@ -24,6 +24,6 @@
 |---|---|---|---|
 | T14 | R1 不死保底：parse 降級、>11 中途點不 raise、成本矩陣、`run_mission` 保證 finish、ROS 例外也 finish | 手冊範例（count=8、goal=12）、缺 Goal、缺欄位、丟例外的 Robot、12 中途點：都 `finished_at` 非 None | done |
 | T15 | R2 速度線上校正（只往慢、夾 0.5–1.0）、`move_timeout = max(60, 2×估計腿)` | 真速 {0.05, 0.1, 0.2} × n {8, 12}：Goal 率不低於現行、與 oracle 差 ≤10%、速度正確時損失 ≤3% | done（矩陣：Goal 率全 ≥ 現行、與 oracle 差 ≤ 4.3%、速度對時零損失） |
-| T16 | R3 規則世界旗標與 tune 的四世界／最大後悔表；README 第 5 節只留跨世界穩定的結論 | tune 印四世界；README 啟示逐條標 fake-sensitive 或移除 | |
-| T17 | R4 校準與飛行記錄：log 欄位、探針旗標（預設關）、settle 只計新 stamp、沒成功移動不回報、ROS `_call` 用 rospy 時間 | 單場 log 能算速度與 settle 秒數；重複樣本不算穩定；旗標跑通 | |
+| T16 | R3 規則世界旗標與 tune 的四世界／最大後悔表；README 第 5 節只留跨世界穩定的結論 | tune 印四世界；README 啟示逐條標 fake-sensitive 或移除 | done |
+| T17 | R4 校準與飛行記錄：log 欄位、探針旗標（預設關）、settle 只計新 stamp、沒成功移動不回報、ROS `_call` 用 rospy 時間 | 單場 log 能算速度與 settle 秒數；重複樣本不算穩定；旗標跑通 | done（ROS 端未測） |
 | T18 | R5 上機劇本改寫 ros/README | 文件 | |

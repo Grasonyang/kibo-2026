@@ -8,7 +8,7 @@
   機體中心算，把 `camera_offset` 傳 `(0, 0, 0)` 即可（`MissionConfig.camera_offset_m`）。
 """
 
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional
 
 from kibo.checkpoints import Band, Checkpoint
 from kibo.geometry import (
@@ -30,6 +30,7 @@ CAMERA_OFFSET = (0.14, 0.0, 0.0)  # 機體座標系，公尺
 class Pose(NamedTuple):
     position: Vec3
     orientation: Quat
+    stamp: Optional[float] = None  # 導航資料的時間戳（秒）；用來分辨是不是同一筆資料
 
 
 class Judgement(NamedTuple):

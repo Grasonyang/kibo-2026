@@ -100,6 +100,10 @@ class MissionConfig(NamedTuple):
     min_speed_ratio: float = 0.5  # 校正後的速度不低於預設的這個比例
     calibrate_below_ratio: float = 0.8  # 實測比預設慢超過這個比例才校正；實測含起停，略慢是正常
     calibrate_min_leg_m: float = 1.0  # 只用這麼長以上的腿校正；短腿的秒數被起停吃掉，不反映速度
+    # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
+    notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
+    skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
+    deliberate_late_after: int = 0  # 回報過這麼多點之後故意等到逾時，看逾時規則；0 = 關
 
 
 DEFAULT_MISSION = MissionConfig()
@@ -229,10 +233,15 @@ class _Run:
             self.speeds = calibrated
 
     def settle(self, cp: Checkpoint) -> Settled:
-        """等到連續幾次自我判定都達標（stable=True），或逾時（回傳最後一次判定）。"""
+        """等到連續幾次自我判定都達標（stable=True），或逾時（回傳最後一次判定）。
+
+        同一筆導航資料只算一次：若 stamp 沒變，不計入連續次數，免得導航更新慢時
+        把同一筆讀五次當成「穩定 1 秒」。
+        """
         deadline = self.robot.now() + self.cfg.settle_timeout_sec
         streak = 0
         last: Optional[Judgement] = None
+        last_stamp: Optional[float] = None
         max_samples = int(self.cfg.settle_timeout_sec / self.cfg.settle_interval_sec) + 2
         for _ in range(max_samples):
             if self.robot.now() > deadline or self.robot.stop_requested():
@@ -240,6 +249,10 @@ class _Run:
             pose = self.current_pose()
             if pose is None:
                 return Settled(None, False)
+            if pose.stamp is not None and pose.stamp == last_stamp:
+                self.robot.sleep(self.cfg.settle_interval_sec)
+                continue
+            last_stamp = pose.stamp
             last = judge(pose, cp, self.cfg.camera_offset_m)
             streak = streak + 1 if last.level >= self.required_level() else 0
             if streak >= self.cfg.settle_samples:
@@ -275,13 +288,17 @@ class _Run:
         if settled.judgement is None:
             return "at #%d: no navigation data" % cp.id
         j = settled.judgement
-        return "at #%d: dist=%.2fm centering=%.1f roll=%.1f -> Lv%d%s" % (
+        age = ""
+        if self.last_pose is not None and self.last_pose.stamp is not None:
+            age = " nav_age=%.2fs" % (self.robot.now() - self.last_pose.stamp)
+        return "at #%d: dist=%.2fm centering=%.1f roll=%.1f -> Lv%d%s%s" % (
             cp.id,
             j.distance_m,
             j.centering_deg,
             j.roll_deg,
             j.level,
             " (stable)" if settled.stable else " (unstable)",
+            age,
         )
 
     def camera_fix(self, cp: Checkpoint) -> bool:
@@ -310,8 +327,16 @@ class _Run:
                 settled = self.settle(cp)
                 self.log("refined: " + self.describe(cp, settled))
         # 穩定達標就回報；沒穩定但最後一次判定至少 Lv1 也回報（伺服器才是裁判，
-        # 不回報一定 0 分）；完全沒有導航資料就不回報，因為我們根本不知道在哪。
-        notified = settled.level > 0 and self.notify(cp)
+        # 不回報一定 0 分）。沒有成功移動到點就不回報（手冊 6.5），完全沒有導航資料
+        # 也不回報。探針旗標 notify_even_if_level0 可以在模擬器上覆寫這兩條。
+        should_notify = (settled.level > 0 and moved) or self.cfg.notify_even_if_level0
+        notified = should_notify and self.notify(cp)
+        if (
+            self.cfg.deliberate_late_after
+            and len(self.visits) + 1 == self.cfg.deliberate_late_after
+        ):
+            self.log("PROBE: deliberately waiting past the time limit")
+            self.robot.sleep(self.remaining() + 5.0)
         record = Visit(cp.id, moved, settled.level, settled.stable, notified)
         self.visits.append(record)
         return record
@@ -352,8 +377,13 @@ def _fly(run: "_Run", robot: Robot, config: MissionConfig):
     for warning in cps.warnings:
         run.log("checkpoints warning: " + warning)
     run.log("%d checkpoints, goal #%d" % (len(cps.checkpoints), cps.goal_id))
+    if config.notify_even_if_level0 or config.skip_one_waypoint or config.deliberate_late_after:
+        run.log("PROBE FLAGS ON: this build is for simulator experiments only")
 
     pending: List[Checkpoint] = list(cps.waypoints)
+    if config.skip_one_waypoint and pending:
+        skipped = pending.pop(0)
+        run.log("PROBE: skipping waypoint #%d on purpose" % skipped.id)
     by_id: Dict[int, Checkpoint] = {cp.id: cp for cp in cps.checkpoints}
     goal_reached = False
     for _ in range(len(cps.checkpoints) + 1):  # 每輪至少消化一個點，所以有上限

@@ -23,6 +23,7 @@ from ib2_msgs.msg import (
     CtlCommandAction,
     CtlCommandGoal,
     CtlCommandResult,
+    CtlStatus,
     CtlStatusType,
     Navigation,
 )
@@ -73,6 +74,8 @@ class RosRobot(Robot):
         self._mission_finished = rospy.ServiceProxy("/event/mission_finished", MissionFinished)
         self._checkpoints = rospy.ServiceProxy("/mission/get_checkpoints", CheckPoints)
         self._nav_sub = rospy.Subscriber("/sensor_fusion/navigation", Navigation, self._on_nav)
+        self._ctl_type = None  # /ctl/status 最新的控制狀態，只拿來 log
+        self._ctl_sub = rospy.Subscriber("/ctl/status", CtlStatus, self._on_ctl)
         # 相機（選用）：只在 settle 不穩定時用來修正幾公分
         self._image = None
         self._camera_info = None
@@ -103,7 +106,7 @@ class RosRobot(Robot):
             return None
         p = nav.pose.pose.position
         q = nav.pose.pose.orientation
-        return Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w))
+        return Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=nav.pose.header.stamp.to_sec())
 
     def move_to(self, target, timeout_sec):
         if not self._command.wait_for_server(rospy.Duration(ACTION_SERVER_TIMEOUT_SEC)):
@@ -114,6 +117,12 @@ class RosRobot(Robot):
             type=CtlStatusType(type=CtlStatusType.MOVE_TO_ABSOLUTE_TARGET),
         )
         status, result = self._run_action(self._command, goal, timeout_sec)
+        rospy.loginfo(
+            "move_to done: status=%s result=%s ctl_status=%s",
+            status,
+            getattr(result, "type", None),
+            self._ctl_type,
+        )
         if status == ACTION_TIMEOUT:
             return MOVE_TIMEOUT
         if status == ACTION_STOPPED or result is None:
@@ -212,6 +221,9 @@ class RosRobot(Robot):
         with self._nav_lock:
             self._nav = msg
 
+    def _on_ctl(self, msg):
+        self._ctl_type = msg.type.type if hasattr(msg.type, "type") else msg.type
+
     def _on_image(self, msg):
         with self._image_lock:
             self._image = msg
@@ -282,8 +294,17 @@ class RosRobot(Robot):
                 done.set()
 
         threading.Thread(target=worker, name=name, daemon=True).start()
-        if not done.wait(SERVICE_TIMEOUT_SEC):
-            rospy.logerr("%s did not respond within %.0fs", name, SERVICE_TIMEOUT_SEC)
+        # 用 rospy 的時間等，模擬時間與牆鐘不同步時逾時單位才一致；次數有上限。
+        deadline = rospy.get_time() + SERVICE_TIMEOUT_SEC
+        max_polls = int(SERVICE_TIMEOUT_SEC / 0.05) + 2
+        for _ in range(max_polls):
+            if done.is_set():
+                break
+            if rospy.get_time() > deadline:
+                rospy.logerr("%s did not respond within %.0fs", name, SERVICE_TIMEOUT_SEC)
+                return None
+            rospy.sleep(0.05)
+        if not done.is_set():
             return None
         if "error" in box:
             rospy.logerr("%s failed: %s", name, box["error"])

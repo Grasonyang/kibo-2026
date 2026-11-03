@@ -15,6 +15,9 @@ class Scoring(NamedTuple):
     goal_points: float
     max_multiplier: float
     time_limit_sec: float
+    # 規則書沒講清楚的兩件事，各做成開關（council v1-review R3）：
+    goal_requires_all: bool = False  # A：Goal 分數要求通過全部 CheckPoint；B：只要 Goal 點通過
+    timeout_keeps_points: bool = False  # T1：逾時仍保留已得的 CheckPoint 分；T0：整場 0
 
     def points_for_level(self, level: int) -> float:
         return self.level_points.get(level, 0.0)
@@ -24,11 +27,22 @@ class Scoring(NamedTuple):
         fraction = max(0.0, min(1.0, remaining_sec / self.time_limit_sec))
         return 1.0 + (self.max_multiplier - 1.0) * fraction
 
-    def total(self, levels, goal_reached: bool, remaining_sec: float) -> float:
+    def total(
+        self,
+        levels,
+        goal_reached: bool,
+        remaining_sec: float,
+        all_passed: bool = True,
+        late: bool = False,
+    ) -> float:
+        """`late` 是沒在時限內完成回報；`all_passed` 是每個 CheckPoint 都通過了。"""
+        if late and not self.timeout_keeps_points:
+            return 0.0
         points = sum(self.points_for_level(lv) for lv in levels)
-        if goal_reached:
+        goal_counts = goal_reached and not late and (all_passed or not self.goal_requires_all)
+        if goal_counts:
             points += self.goal_points
-        return points * self.multiplier(remaining_sec)
+        return points * self.multiplier(0.0 if late else remaining_sec)
 
 
 DEFAULT_SCORING = Scoring(
@@ -37,3 +51,12 @@ DEFAULT_SCORING = Scoring(
     max_multiplier=2.0,
     time_limit_sec=float(TIME_LIMIT_SEC),
 )
+
+# 四個「規則世界」。哪一個是真的，要拿到模擬器用兩場探針才知道（ros/README.md）。
+WORLDS = {
+    "B/T0": DEFAULT_SCORING,
+    "B/T1": DEFAULT_SCORING._replace(timeout_keeps_points=True),
+    "A/T0": DEFAULT_SCORING._replace(goal_requires_all=True),
+    "A/T1": DEFAULT_SCORING._replace(goal_requires_all=True, timeout_keeps_points=True),
+}
+WORLD_NAMES = ("B/T0", "B/T1", "A/T0", "A/T1")

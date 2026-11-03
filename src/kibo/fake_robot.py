@@ -77,6 +77,7 @@ class FakeRobot(Robot):
         return Pose(
             add(self.true_pose.position, (jitter[0], jitter[1], jitter[2])),
             self.true_pose.orientation,
+            stamp=self.t,
         )
 
     def move_to(self, target: Pose, timeout_sec: float) -> str:
@@ -157,8 +158,10 @@ class FakeRobot(Robot):
             return 0.0
         return max(0.0, self.cfg.scoring.time_limit_sec - self.finished_at)
 
-    def score(self) -> float:
+    def score(self, scoring: Optional[Scoring] = None) -> float:
+        """假分數。不給 scoring 就用設定裡的；給 `kibo.scoring.WORLDS` 的某一個可看其他世界。"""
+        rules = scoring or self.cfg.scoring
         goal = self.checkpoints.goal_id in self.passed_ids
-        if self.finished_at is None or self.finished_at > self.cfg.scoring.time_limit_sec:
-            return 0.0  # 沒在時限內完成回報
-        return self.cfg.scoring.total(self.passed_levels, goal, self.remaining_at_finish())
+        late = self.finished_at is None or self.finished_at > rules.time_limit_sec
+        all_passed = len(self.passed_ids) == len(self.checkpoints.checkpoints)
+        return rules.total(self.passed_levels, goal, self.remaining_at_finish(), all_passed, late)
