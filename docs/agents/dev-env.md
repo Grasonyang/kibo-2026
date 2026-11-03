@@ -51,7 +51,7 @@ ROS 相關程式（要 `import rospy`、`krpc_ib2_msgs`）只能在模擬器的�
 ```markdown
 - 安裝：`uv sync --locked`
 - 格式：`uv run ruff format --check .`
-- 靜態檢查：`uv run ruff check . && uv run pyright && uv run vermin --target=3.6- --no-tips --violations src`
+- 靜態檢查：`uv run ruff check . && uv run pyright && uv run vermin --target=3.6- --no-tips --violations src ros`
 - 測試（全部）：`uv run pytest`
 - 測試（單檔）：`uv run pytest tests/test_x.py`
 ```

@@ -13,5 +13,6 @@ sync_user() {
   [ -d "$root/krpc_user" ] || { echo "沒有 $root/krpc_user，先跑 scripts/setup-sim.sh 匯入官方範本" >&2; exit 1; }
   rsync -a --delete --exclude 'scripts/kibo' "$root/krpc_user/" "$user_pkg/"
   mkdir -p "$user_pkg/scripts"
+  rsync -a --exclude 'README.md' "$root/ros/" "$user_pkg/scripts/"
   rsync -a --delete --exclude '__pycache__' "$root/src/kibo/" "$user_pkg/scripts/kibo/"
 }
