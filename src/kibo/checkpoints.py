@@ -1,7 +1,8 @@
 """把 `/mission/get_checkpoints` 回傳的 JSON 變成程式好用的結構。
 
 伺服器回的是一段 JSON 字串（Programming Manual 6.3.1）。這個模組只做「讀懂它」，
-不做任何決策。每個 CheckPoint 有三組餘裕（band）：
+資料不完整時盡量救（跳過壞點、補姿態、換終點）並記下 warnings，不做路線或時間的決策。
+每個 CheckPoint 有三組餘裕（band）：
 
 - position_bands：IB2 離 CheckPoint 中心多近（公尺），對應 Lv3/Lv2/Lv1。
 - centering_bands：相機視線與「指向 marker」方向的夾角上限（度）。
@@ -118,15 +119,21 @@ def parse_checkpoints(message: str) -> CheckpointSet:
         raise ValueError("no usable checkpoints")
 
     declared = data.get("checkpoint_count")
-    if declared is not None and int(declared) != len(raw_list):
-        warnings.append("checkpoint_count=%s but %d listed" % (declared, len(raw_list)))
+    try:
+        if declared is not None and int(declared) != len(raw_list):
+            warnings.append("checkpoint_count=%s but %d listed" % (declared, len(raw_list)))
+    except _STRUCTURE_ERRORS:
+        warnings.append("checkpoint_count unreadable: %r" % (declared,))
 
     ids = [cp.id for cp in checkpoints]
     try:
         goal_id = int(data["goalpoint_id"])
     except _STRUCTURE_ERRORS:
         goal_id = ids[-1]
-        warnings.append("goalpoint_id missing, using last checkpoint #%d" % goal_id)
+        warnings.append(
+            "goalpoint_id missing or unreadable (%r), using last checkpoint #%d"
+            % (data.get("goalpoint_id"), goal_id)
+        )
     if goal_id not in ids:
         warnings.append(
             "goalpoint_id=%d not in list, using last checkpoint #%d" % (goal_id, ids[-1])

@@ -1,6 +1,7 @@
 """R4：校準與飛行記錄——穩定判定只計新資料、探針旗標、沒成功移動不回報、log 可算速度。"""
 
 from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from kibo.field import TIME_LIMIT_SEC
 from kibo.judge import Pose
 from kibo.mission import DEFAULT_MISSION, MOVE_INVALID, run_mission
 
@@ -59,12 +60,54 @@ def test_skip_one_waypoint_probe_leaves_exactly_one_out(three_point_message):
 def test_deliberate_late_probe_finishes_after_the_limit(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION._replace(deliberate_late_after=1))
-    assert robot.finished_at is not None and robot.finished_at > 300.0
+    assert robot.finished_at is not None and robot.finished_at > TIME_LIMIT_SEC
 
 
-def test_log_has_per_leg_seconds_and_nav_age(three_point_message):
+def test_log_has_per_leg_seconds_that_reproduce_the_fake_speed(three_point_message):
+    import re
+
     robot = FakeRobot(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)
-    legs = [line for line in robot.logs if "leg:" in line and "m in" in line]
+    legs = [re.search(r"leg: ([\d.]+)m in ([\d.]+)s", line) for line in robot.logs]
+    legs = [m for m in legs if m]
     assert len(legs) == 3
+    for m in legs:
+        metres, seconds = float(m.group(1)), float(m.group(2))
+        # 假機器人 0.12 m/s 加 3 秒起停：實測速度在 0.03 到 0.12 之間
+        assert 0.03 < metres / seconds <= 0.12
     assert any("nav_age=" in line for line in robot.logs)
+
+
+def test_log_lets_you_measure_settle_seconds(three_point_message):
+    import re
+
+    robot = FakeRobot(three_point_message, PERFECT)
+    run_mission(robot, DEFAULT_MISSION)
+    left = {}
+    for line in robot.logs:
+        m = re.match(r"\[t=[\d.]+ +([\d.]+)s left\] (.*)", line)
+        if m and ("move to #1 attempt 1: success" in m.group(2) or m.group(2).startswith("at #1:")):
+            left[m.group(2)[:10]] = float(m.group(1))
+    settle_sec = left["move to #1"] - left["at #1: dis"]
+    assert 1.0 <= settle_sec <= DEFAULT_MISSION.settle_timeout_sec + 1.0
+
+
+def test_probe_flags_are_off_by_default():
+    assert not DEFAULT_MISSION.probes_on
+    assert DEFAULT_MISSION.notify_even_if_level0 is False
+    assert DEFAULT_MISSION.skip_one_waypoint is False
+    assert DEFAULT_MISSION.deliberate_late_after == 0
+    assert DEFAULT_MISSION._replace(skip_one_waypoint=True).probes_on
+
+
+def test_deliberate_late_counts_notified_checkpoints_and_honours_stop(three_point_message):
+    class StopDuringWait(FakeRobot):
+        def sleep(self, sec):
+            super().sleep(sec)
+            if self.t > 200.0:
+                self.stop = True
+
+    robot = StopDuringWait(three_point_message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION._replace(deliberate_late_after=1))
+    assert report.aborted == "stop requested"
+    assert robot.t < 300.0  # 等到一半就被停下來，沒有硬睡到逾時

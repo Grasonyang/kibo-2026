@@ -104,6 +104,7 @@ uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera  
 |---|---|---|
 | IB2 速度 0.1 m/s、轉速 15°/s | `planner.Speeds` | 看 log 每段 `leg:` 的實際秒數對模型；程式會自動往慢修，但預設值要改 |
 | 每點穩定 8 秒、終點保險 25 秒 | `budget.BudgetConfig` | 同上 |
+| 速度校正的門檻：慢 25% 才校正（`calibrate_below_ratio=0.8`）、只用 ≥ 1 m 的腿（`calibrate_min_leg_m`）、累積 20 秒模型時間才動（`calibrate_min_predicted_sec`）、最多調慢 2 倍 | `mission.MissionConfig` | 看 log 的 `leg:` 與 `speed calibrated` 行；假機器人的 3 秒起停（`fake_robot.move_overhead_sec`）也是猜的 |
 | Lv3/2/1 = 10/6/3 分、Goal 20 分、倍率線性 1 到 2 | `scoring.py` | Web 模擬器的結果 JSON；規則書引用的分數表不在 PDF 裡 |
 | **Goal 分數要不要求通過全部 CheckPoint**（A／B） | `scoring.Scoring.goal_requires_all` | 探針：故意漏一點看 `goal.success` |
 | **逾時會不會把已得分歸零**（T0／T1） | `scoring.Scoring.timeout_keeps_points` | 探針：故意逾時 |
@@ -124,11 +125,11 @@ uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera  
 
 | 結論 | 跨世界、跨速度都成立？ | 說明 |
 |---|---|---|
-| **速度猜錯時，線上校正是最大的單一改善** | 是 | 真速只有一半時：不校正平均 27–57 分、Goal 10–14/20；校正後 75–89 分、Goal 19–20/20；速度猜對時零影響 |
-| **刪點保 Goal 是最不會後悔的選擇** | 是 | 四世界裡只在「Goal 需全點且逾時保留分」小輸 2–6 分，其餘大勝（council 主席重現） |
+| **速度猜錯時，線上校正是最大的單一改善** | 是 | 真速只有一半（0.05）時，20 場、世界 B/T0、沒相機：8 點不校正 27 分、Goal 10/20 → 校正 75 分、20/20；12 點 57 分、14/20 → 89 分、19/20。`kibo.tune --speed 0.05` 的「不校正速度」在四個世界最大後悔 40 分，其餘 ≤ 7。速度猜對（0.1、0.2）時與不校正完全相同 |
+| **刪點保 Goal 是最不會後悔的選擇** | 是 | `kibo.tune` 的「不刪點（只做對照）」變體：四世界裡只在「Goal 需全點且逾時保留分」小輸幾分，其餘大輸（12 點、真速 0.1 時逾時世界整場 0） |
 | 相機修正有幫助 | **fake-sensitive** | 只在相對移動幾乎無誤差時成立；相對移動加 5 cm 雜訊，增益就消失 |
 | 只求 Lv2 比追 Lv3 好 | **fake-sensitive** | 取決於真實的 Lv 分數比與到點誤差，兩者都沒公布 |
-| 保險、穩定估值、趕時間門檻怎麼調 | **分不出來** | 差異 ≤ 10 分，小於資格賽 10 次平均的標準誤；拿到真資料前不調 |
+| 保險、穩定估值、趕時間門檻怎麼調 | **分不出來** | 差異 5–10 分，與資格賽 10 次平均的標準誤（單場 sd 12–17，標準誤約 4–5）同量級；拿到真資料前不調 |
 
 一個值得知道的發現：相機在機頭前 14 cm，marker 只離 50 cm，所以**側向偏 15 cm 就會讓
 對中掉到 Lv1**（若伺服器也用相機位置算）。位置要準，而且沿視線方向偏比側向偏好。
@@ -138,4 +139,4 @@ uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera  
 - ROS 接線層沒跑過（沒有模擬器）。第一次跑要核對的事列在 [ros/README.md](../../ros/README.md)。
 - 相機修正已接進流程但 ROS 端沒測過：主流程靠導航資料，只有「到了但不穩」時才用相機看 marker 修正幾公分（`src/kibo/vision.py`，合成影像測過）。假機器人可用 `--camera` 開假相機。
 - 更多點子與取捨：[ideas.md](ideas.md)。規格：[spec.md](spec.md)。進度：[tickets.md](tickets.md)。第一輪的回顧：[retro.md](retro.md)。
-- 第一版結案後開了一場 council（四位委員兩輪匿名互評，主席查證）：[notes/council/v1-review/synthesis.md](../../notes/council/v1-review/synthesis.md)，裁決 R1–R6 已實作（T14–T18），待使用者確認。
+- 第一版結案後開了一場 council（四位委員兩輪匿名互評，主席查證）：[notes/council/v1-review/synthesis.md](../../notes/council/v1-review/synthesis.md)，裁決 R1–R5 已實作（T14–T18，R6 是「停止」清單），待使用者確認。

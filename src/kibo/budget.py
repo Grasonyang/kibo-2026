@@ -24,6 +24,7 @@ class BudgetConfig(NamedTuple):
     settle_sec: float = 8.0  # 每個點到位後穩定並等伺服器判定的時間
     margin_sec: float = 25.0  # 留給 Goal 與完成回報的保險
     speeds: Speeds = DEFAULT_SPEEDS
+    allow_drop: bool = True  # False 只用來做對照（tune 的「不刪點」變體），比賽不要關
 
 
 DEFAULT_BUDGET = BudgetConfig()
@@ -84,7 +85,7 @@ def plan_within_budget(
     route = plan_route(start_pos, start_att, remaining, goal, cost)
     for _ in range(len(waypoints)):  # 每輪刪一點，所以最多 len(waypoints) 輪
         est = estimated_seconds(route, config.settle_sec)
-        if est + config.margin_sec <= remaining_sec or not remaining:
+        if est + config.margin_sec <= remaining_sec or not remaining or not config.allow_drop:
             break
         savings = _savings(route, by_id, start_pos, start_att, config.speeds, config.settle_sec)
         victim = max(savings, key=lambda cp_id: savings[cp_id])

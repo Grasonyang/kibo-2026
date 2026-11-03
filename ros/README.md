@@ -29,10 +29,10 @@ Web 模擬器只回結果 JSON 與我們的 log（手冊 4.3.2），**log 寫了
 
 ### 第 1 場：只收資料，不飛
 
-把 `MissionConfig` 的 `max_move_attempts` 設 0 或直接在 `_on_start` 不呼叫 `run_mission`，只 log：
-nav 頻率與 `header.stamp` 是否有值（空值會讓 `pose()` 永遠 None → 整場不回報）、`/ctl/status.type` 序列（RELEASE 何時結束）、
-`camera_info.K` 與影像 encoding、`/use_sim_time`。
-改程式：stamp 為 0 → `pose()` 改用接收時間；start 比 RELEASE 結束早 → t0 等狀態再起算。
+節點每場開始都會先印 `[survey]`（nav 頻率與 stamp、status、frame、`/use_sim_time`、`camera_info.K`、影像 encoding、`/ctl/status`），
+另外 `/ctl/status` 每次狀態改變都記一行（RELEASE 何時結束、有沒有 DISTURBED）。
+要純收資料不飛，啟動時給 ROS 參數 `_survey_only:=true`：節點會 mission_start、印 survey、立刻 mission_finish。
+改程式：stamp 為 0 → `pose()` 改用接收時間；start 比 RELEASE 結束早 → t0 等狀態再起算；`use_sim_time` 為真 → 核對 `_call` 的逾時行為。
 
 ### 第 2 場：正常跑一場（校準）
 
@@ -45,7 +45,7 @@ nav 頻率與 `header.stamp` 是否有值（空值會讓 `pose()` 永遠 None �
 
 ### 第 3、4 場：只在刪點會觸發時才做的探針
 
-第 2 場若從沒出現 `dropping`，這兩場可以省。探針旗標預設關，**決賽程式不得開啟**（規則書 4.2.4 只能跑一次）。
+第 2 場若從沒出現 `dropping`，這兩場可以省。探針旗標預設關，用 ROS 私有參數開（`_probe_skip_one_waypoint:=true`、`_probe_deliberate_late_after:=2`、`_probe_notify_even_if_level0:=true`），log 會印 `PROBE FLAGS ON`；**決賽程式不得開啟**（規則書 4.2.4 只能跑一次），提交前確認 launch 檔沒有帶這些參數。
 - `skip_one_waypoint=True`：看 `goal.success` 與 Goal Score → 定 A（需全點）或 B（只需 Goal 點）。
 - `deliberate_late_after=2`：看已過的點分數是否保留、Time Bonus 多少 → 定 T0 或 T1。
 - `notify_even_if_level0=True`：自判 0 分也回報，拿伺服器判定校準 `judge`。

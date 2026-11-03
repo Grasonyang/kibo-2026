@@ -66,3 +66,13 @@ def test_hopeless_json_still_raises():
         parse_checkpoints("not json at all")
     with pytest.raises(ValueError):
         parse_checkpoints('{"checkpoints": [], "goalpoint_id": 1}')
+
+
+def test_missing_goalpoint_field_and_unreadable_count_only_warn():
+    message = json.loads(checkpoints_message([MANUAL_CHECKPOINT_1, GOAL_12]))
+    del message["goalpoint_id"]
+    message["checkpoint_count"] = "N/A"
+    cps = parse_checkpoints(json.dumps(message))
+    assert cps.goal_id == 12
+    assert any("goalpoint_id missing" in w for w in cps.warnings)
+    assert any("checkpoint_count unreadable" in w for w in cps.warnings)

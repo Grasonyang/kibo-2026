@@ -13,7 +13,7 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
@@ -22,6 +22,8 @@ from kibo.geometry import Vec3, distance, norm
 from kibo.judge import CAMERA_OFFSET, Judgement, Pose, judge, target_attitude
 from kibo.planner import Speeds, leg_seconds
 from kibo.vision import body_correction, expected_marker_in_body
+
+ABORT_STOP = "stop requested"
 
 MOVE_SUCCESS = "success"
 MOVE_TIMEOUT = "timeout"
@@ -85,7 +87,7 @@ class MissionConfig(NamedTuple):
     budget: BudgetConfig = DEFAULT_BUDGET
     move_timeout_sec: float = 60.0
     max_move_attempts: int = 2  # 總共嘗試幾次（含第一次）
-    settle_samples: int = 5  # 連續幾次取樣都達標才算穩定；5 次、間隔 0.25 秒剛好涵蓋 1 秒
+    settle_samples: int = 5  # 連續幾筆新的導航資料都達標才算穩定；5 筆、間隔 0.25 秒約涵蓋 1 秒
     settle_interval_sec: float = 0.25
     settle_timeout_sec: float = 6.0
     target_level: int = 3
@@ -103,7 +105,15 @@ class MissionConfig(NamedTuple):
     # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
     notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
     skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
-    deliberate_late_after: int = 0  # 回報過這麼多點之後故意等到逾時，看逾時規則；0 = 關
+    deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
+    calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
+
+    @property
+    def probes_on(self) -> bool:
+        """任一探針旗標開著。決賽程式必須是 False。"""
+        return bool(
+            self.notify_even_if_level0 or self.skip_one_waypoint or self.deliberate_late_after
+        )
 
 
 DEFAULT_MISSION = MissionConfig()
@@ -158,7 +168,8 @@ class _Run:
         return self.cfg.time_limit_sec - self.elapsed()
 
     def log(self, message: str) -> None:
-        self.robot.log("[%6.1fs left] %s" % (self.remaining(), message))
+        """前綴：機器人時鐘的絕對秒數（對結果 JSON 的事件時間用）與剩餘秒數。"""
+        self.robot.log("[t=%.1f %6.1fs left] %s" % (self.robot.now(), self.remaining(), message))
 
     def current_pose(self) -> Optional[Pose]:
         """幾次都讀不到導航資料就回 None；呼叫端自己決定怎麼辦，不假裝知道位置。"""
@@ -188,7 +199,7 @@ class _Run:
         return 1 if self.remaining() < self.cfg.hurry_sec else self.cfg.target_level
 
     def move_timeout(self, target: Optional[Pose] = None) -> float:
-        """至少 move_timeout_sec，長腿放大到估計秒數的兩倍，但不能超過剩餘時間。"""
+        """至少 move_timeout_sec，長腿放大到估計秒數的兩倍；不超過剩餘時間，但最少 5 秒。"""
         timeout = self.cfg.move_timeout_sec
         if target is not None and self.last_pose is not None:
             estimate = leg_seconds(
@@ -201,8 +212,13 @@ class _Run:
             timeout = max(timeout, 2.0 * estimate)
         return max(5.0, min(timeout, self.remaining()))
 
-    def record_leg(self, start: Optional[Pose], target: Pose, seconds: float) -> None:
-        """一段成功的移動：記錄距離與秒數，必要時把規劃用的速度往慢修。
+    def record_leg(
+        self, start: Optional[Pose], target: Pose, seconds: float, timed_out: bool = False
+    ) -> None:
+        """一段移動：記錄距離與秒數，必要時把規劃用的速度往慢修。
+
+        逾時的腿也算證據：實際秒數至少是逾時值，所以算出來的「慢幾倍」是下界，
+        只會把速度往慢修，方向安全；沒有它，比假設慢很多的機器人會一直逾時、永遠學不到。
 
         比的是「模型預測的秒數」對「實際秒數」，所以轉向多的腿不會被誤判成飛得慢。
         實際比預測慢超過死區才動，而且只往慢修、不低於預設的一半；短腿不算，
@@ -215,20 +231,25 @@ class _Run:
         predicted = leg_seconds(
             start.position, start.orientation, target.position, target.orientation, default
         )
-        self.log("leg: %.2fm in %.1fs (model %.1fs)" % (metres, seconds, predicted))
+        self.log(
+            "leg: %.2fm in %.1fs (model %.1fs)%s"
+            % (metres, seconds, predicted, " TIMED OUT, lower bound" if timed_out else "")
+        )
         if not self.cfg.calibrate_speed or metres < self.cfg.calibrate_min_leg_m:
             return
         self.predicted_sec += predicted
         self.actual_sec += seconds
-        slowdown = self.actual_sec / max(self.predicted_sec, 1e-6)
+        if self.predicted_sec < self.cfg.calibrate_min_predicted_sec:
+            return  # 一兩段腿不足以下結論
+        slowdown = self.actual_sec / self.predicted_sec
         if slowdown <= 1.0 / self.cfg.calibrate_below_ratio:
-            return
+            slowdown = 1.0  # 在死區內：用預設值（已校正過的也拉回預設，不留棘輪）
         slowdown = min(slowdown, 1.0 / self.cfg.min_speed_ratio)
         calibrated = Speeds(default.linear_mps / slowdown, default.angular_dps / slowdown)
-        if calibrated.linear_mps < self.speeds.linear_mps:
+        if abs(calibrated.linear_mps - self.speeds.linear_mps) > 1e-9:
             self.log(
-                "speed calibrated: %.3f -> %.3f m/s (x%.2f slower than model)"
-                % (self.speeds.linear_mps, calibrated.linear_mps, slowdown)
+                "speed calibrated: %.3f -> %.3f m/s (x%.2f vs model, over %.0fs of legs)"
+                % (self.speeds.linear_mps, calibrated.linear_mps, slowdown, self.predicted_sec)
             )
             self.speeds = calibrated
 
@@ -268,9 +289,13 @@ class _Run:
             start, started_at = self.last_pose, self.robot.now()
             result = self.robot.move_to(target, self.move_timeout(target))
             self.log("move to #%d attempt %d: %s" % (cp.id, attempt + 1, result))
+            elapsed = self.robot.now() - started_at
             if result == MOVE_SUCCESS:
-                self.record_leg(start, target, self.robot.now() - started_at)
+                if attempt == 0:  # 重試時起點已經不是 last_pose，這段腿不拿來校正
+                    self.record_leg(start, target, elapsed)
                 return True
+            if result == MOVE_TIMEOUT and attempt == 0:
+                self.record_leg(start, target, elapsed, timed_out=True)
             if result == MOVE_INVALID:
                 return False  # 再試也不會變合法
         return False
@@ -331,12 +356,13 @@ class _Run:
         # 也不回報。探針旗標 notify_even_if_level0 可以在模擬器上覆寫這兩條。
         should_notify = (settled.level > 0 and moved) or self.cfg.notify_even_if_level0
         notified = should_notify and self.notify(cp)
-        if (
-            self.cfg.deliberate_late_after
-            and len(self.visits) + 1 == self.cfg.deliberate_late_after
-        ):
+        notified_so_far = sum(1 for v in self.visits if v.notified) + (1 if notified else 0)
+        if self.cfg.deliberate_late_after and notified_so_far == self.cfg.deliberate_late_after:
             self.log("PROBE: deliberately waiting past the time limit")
-            self.robot.sleep(self.remaining() + 5.0)
+            for _ in range(int(self.cfg.time_limit_sec) + 10):  # 每秒看一次停止要求
+                if self.remaining() < -5.0 or self.robot.stop_requested():
+                    break
+                self.robot.sleep(1.0)
         record = Visit(cp.id, moved, settled.level, settled.stable, notified)
         self.visits.append(record)
         return record
@@ -349,7 +375,8 @@ class _Run:
 
 def run_mission(robot: Robot, config: MissionConfig = DEFAULT_MISSION) -> MissionReport:
     """整場任務。不管中間發生什麼（例外也算），只要任務開始了就一定會呼叫 mission_finish，
-    因為完成回報與剩餘時間倍率是乘在全部分數上的。"""
+    因為完成回報與剩餘時間倍率是乘在全部分數上的。唯一例外是收到 /ib2_user/stop：
+    那是操作員要我們停，不再送任何東西。"""
     run = _Run(robot, config)
     if not robot.mission_start():
         run.log("mission_start failed")
@@ -362,14 +389,14 @@ def run_mission(robot: Robot, config: MissionConfig = DEFAULT_MISSION) -> Missio
     except Exception as exc:  # 任何未預期的錯都不能吃掉完成回報
         run.log("mission flow failed: %r" % (exc,))
         aborted = "exception: %r" % (exc,)
-    if aborted == "stop requested":
+    if aborted == ABORT_STOP:
         return run.report(goal_reached, False, aborted)
     finished = robot.mission_finish()
     run.log("mission finished: %s" % finished)
     return run.report(goal_reached, finished, aborted)
 
 
-def _fly(run: "_Run", robot: Robot, config: MissionConfig):
+def _fly(run: _Run, robot: Robot, config: MissionConfig) -> Tuple[bool, str]:
     """從取得 CheckPoint 到抵達 Goal。回傳 (goal_reached, aborted)。"""
     cps = run.fetch_checkpoints()
     if cps is None:
@@ -377,7 +404,7 @@ def _fly(run: "_Run", robot: Robot, config: MissionConfig):
     for warning in cps.warnings:
         run.log("checkpoints warning: " + warning)
     run.log("%d checkpoints, goal #%d" % (len(cps.checkpoints), cps.goal_id))
-    if config.notify_even_if_level0 or config.skip_one_waypoint or config.deliberate_late_after:
+    if config.probes_on:
         run.log("PROBE FLAGS ON: this build is for simulator experiments only")
 
     pending: List[Checkpoint] = list(cps.waypoints)
@@ -388,7 +415,7 @@ def _fly(run: "_Run", robot: Robot, config: MissionConfig):
     goal_reached = False
     for _ in range(len(cps.checkpoints) + 1):  # 每輪至少消化一個點，所以有上限
         if robot.stop_requested():
-            return goal_reached, "stop requested"
+            return goal_reached, ABORT_STOP
         here = run.current_pose() or run.last_pose or Pose(cps.goal.position, cps.goal.attitude)
         plan = plan_within_budget(
             here.position,

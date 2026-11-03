@@ -51,3 +51,36 @@ def test_twelve_waypoints_plan_in_under_a_second():
     assert time.perf_counter() - started < 1.0
     assert sorted(route.order) == list(range(1, 13))
     assert route.order[-1] == 12
+
+
+def _route_cost(start_pos, start_att, waypoints, goal, order):
+    from kibo.planner import leg_seconds
+
+    by_id = {w.id: w for w in waypoints}
+    pos, att, total = start_pos, start_att, 0.0
+    for cp_id in list(order) + [goal.id]:
+        nxt = goal if cp_id == goal.id else by_id[cp_id]
+        total += leg_seconds(pos, att, nxt.position, nxt.attitude)
+        pos, att = nxt.position, nxt.attitude
+    return total
+
+
+def test_held_karp_matches_brute_force_on_random_instances():
+    import itertools
+    import random
+
+    rng = random.Random(5)
+    for _ in range(5):
+        waypoints = [
+            cp(i, (rng.uniform(0, 5), rng.uniform(-1, 1), rng.uniform(-1, 2))) for i in range(1, 7)
+        ]
+        goal = cp(9, (0.5, 0.0, 0.0))
+        start_pos, start_att = (0.2, 0.0, 0.0), IDENTITY_QUAT
+        best = min(
+            _route_cost(start_pos, start_att, waypoints, goal, p)
+            for p in itertools.permutations([w.id for w in waypoints])
+        )
+        route = plan_route(start_pos, start_att, waypoints, goal)
+        assert (
+            abs(_route_cost(start_pos, start_att, waypoints, goal, route.order[:-1]) - best) < 1e-9
+        )

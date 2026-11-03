@@ -46,6 +46,8 @@ from kibo.mission import (
 from kibo.vision import observe_markers
 
 SERVICE_TIMEOUT_SEC = 10.0  # 等服務出現，以及等它回應，各自的上限
+SERVICE_POLL_SEC = 0.05
+SERVICE_MAX_POLLS = int(SERVICE_TIMEOUT_SEC / SERVICE_POLL_SEC) + 2
 ACTION_SERVER_TIMEOUT_SEC = 10.0
 NOTIFY_TIMEOUT_SEC = 15.0
 CANCEL_WAIT_SEC = 5.0
@@ -61,6 +63,7 @@ ACTION_STOPPED = "stopped"
 class RosRobot(Robot):
     def __init__(self):
         self._nav = None  # 最新的 Navigation 訊息
+        self._nav_count = 0
         self._nav_lock = threading.Lock()
         self._stop = threading.Event()
         self._active_lock = threading.Lock()
@@ -220,40 +223,66 @@ class RosRobot(Robot):
     def _on_nav(self, msg):
         with self._nav_lock:
             self._nav = msg
+            self._nav_count += 1
 
     def _on_ctl(self, msg):
-        self._ctl_type = msg.type.type if hasattr(msg.type, "type") else msg.type
+        """/ctl/status 的 type 是 CtlStatusType，裡面才是 int32 type（手冊 6.3.2）。
+        只在狀態改變時記一行，第一場就能看到 RELEASE 何時結束、有沒有 DISTURBED。"""
+        new_type = msg.type.type
+        if new_type != self._ctl_type:
+            rospy.loginfo(
+                "[t=%.1f] ctl_status %s -> %s", rospy.get_time(), self._ctl_type, new_type
+            )
+            self._ctl_type = new_type
 
-    def _on_image(self, msg):
+    def survey(self, seconds=2.0):
+        """只收資料不飛：nav 頻率、stamp、status、camera_info、影像 encoding、sim time。
+        每場開始都印一次，所以第一場不用特別做什麼就有這些數字。"""
+        with self._nav_lock:
+            before = self._nav_count
+        rospy.sleep(seconds)
+        with self._nav_lock:
+            nav, after = self._nav, self._nav_count
+        rospy.loginfo(
+            "[survey] use_sim_time=%s now=%.3f nav_msgs_in_%.1fs=%d",
+            rospy.get_param("/use_sim_time", False),
+            rospy.get_time(),
+            seconds,
+            after - before,
+        )
+        if nav is not None:
+            p = nav.pose.pose.position
+            rospy.loginfo(
+                "[survey] nav frame=%s stamp=%.3f age=%.3f status=%s pos=(%.3f, %.3f, %.3f)",
+                nav.pose.header.frame_id,
+                nav.pose.header.stamp.to_sec(),
+                (rospy.Time.now() - nav.pose.header.stamp).to_sec(),
+                getattr(nav, "status", None),
+                p.x,
+                p.y,
+                p.z,
+            )
+        else:
+            rospy.logwarn("[survey] no navigation message yet")
         with self._image_lock:
-            self._image = msg
-
-    def _on_info(self, msg):
-        with self._image_lock:
-            self._camera_info = msg
-
-    @staticmethod
-    def _to_gray(msg):
-        """sensor_msgs/Image 轉灰階 numpy 陣列。不用 cv_bridge，少一個依賴。"""
-        import cv2
-        import numpy as np
-
-        channels = {"mono8": 1, "bgr8": 3, "rgb8": 3, "bgra8": 4, "rgba8": 4}.get(msg.encoding)
-        if channels is None:
-            rospy.logwarn_throttle(10.0, "unsupported image encoding %s", msg.encoding)
-            return None
-        array = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step // 1)[
-            :, : msg.width * channels
-        ]
-        array = array.reshape(msg.height, msg.width, channels) if channels > 1 else array
-        if channels == 1:
-            return array
-        code = {
-            "bgr8": cv2.COLOR_BGR2GRAY,
-            "rgb8": cv2.COLOR_RGB2GRAY,
-            "bgra8": cv2.COLOR_BGRA2GRAY,
-        }
-        return cv2.cvtColor(array, code.get(msg.encoding, cv2.COLOR_RGBA2GRAY))
+            image, info = self._image, self._camera_info
+        if info is not None:
+            rospy.loginfo(
+                "[survey] camera_info %dx%d K=%s D=%s",
+                info.width,
+                info.height,
+                list(info.K),
+                list(info.D),
+            )
+        if image is not None:
+            rospy.loginfo(
+                "[survey] image %dx%d encoding=%s step=%d",
+                image.width,
+                image.height,
+                image.encoding,
+                image.step,
+            )
+        rospy.loginfo("[survey] ctl_status=%s", self._ctl_type)
 
     @staticmethod
     def _pose_stamped(pose):
@@ -294,17 +323,15 @@ class RosRobot(Robot):
                 done.set()
 
         threading.Thread(target=worker, name=name, daemon=True).start()
-        # 用 rospy 的時間等，模擬時間與牆鐘不同步時逾時單位才一致；次數有上限。
-        deadline = rospy.get_time() + SERVICE_TIMEOUT_SEC
-        max_polls = int(SERVICE_TIMEOUT_SEC / 0.05) + 2
-        for _ in range(max_polls):
-            if done.is_set():
+        # 牆鐘與 ROS 時間各自有上限：sim time 停住時牆鐘擋，牆鐘跑太快時 ROS 時間擋；次數也有上限。
+        ros_deadline = rospy.get_time() + SERVICE_TIMEOUT_SEC
+        for _ in range(SERVICE_MAX_POLLS):
+            if done.wait(SERVICE_POLL_SEC):
                 break
-            if rospy.get_time() > deadline:
-                rospy.logerr("%s did not respond within %.0fs", name, SERVICE_TIMEOUT_SEC)
-                return None
-            rospy.sleep(0.05)
+            if rospy.get_time() > ros_deadline or rospy.is_shutdown():
+                break
         if not done.is_set():
+            rospy.logerr("%s did not respond within %.0fs", name, SERVICE_TIMEOUT_SEC)
             return None
         if "error" in box:
             rospy.logerr("%s failed: %s", name, box["error"])
@@ -362,14 +389,30 @@ class UserNode(object):
             self._started = True
         rospy.loginfo("start %s", msg)
         try:
-            report = run_mission(self._robot, DEFAULT_MISSION)
+            self._robot.survey()
+            if rospy.get_param("~survey_only", False):
+                # 第 1 場「只收資料」：開始、印 survey、立刻完成回報，不飛。
+                rospy.logwarn("survey_only: not flying")
+                self._robot.mission_start()
+                self._robot.mission_finish()
+                return
+            # run_mission 自己保證 mission_finish（例外也會），這裡只做接線。
+            report = run_mission(self._robot, self._config())
             rospy.loginfo("mission report: %s", report)
-        except Exception as exc:  # 任何例外都不能讓節點靜悄悄死掉，也不能沒有完成回報
+        except Exception as exc:  # 任何例外都不能讓節點靜悄悄死掉
             rospy.logerr("mission failed: %s", exc)
-            try:
-                rospy.logwarn("mission_finished after failure: %s", self._robot.mission_finish())
-            except Exception as finish_exc:
-                rospy.logerr("mission_finished also failed: %s", finish_exc)
+
+    @staticmethod
+    def _config():
+        """比賽用 DEFAULT_MISSION。探針只在資格賽模擬器上用，用 ROS 參數開，跑完就不要再帶。"""
+        config = DEFAULT_MISSION._replace(
+            notify_even_if_level0=bool(rospy.get_param("~probe_notify_even_if_level0", False)),
+            skip_one_waypoint=bool(rospy.get_param("~probe_skip_one_waypoint", False)),
+            deliberate_late_after=int(rospy.get_param("~probe_deliberate_late_after", 0)),
+        )
+        if config.probes_on:
+            rospy.logwarn("PROBE FLAGS ON via ROS params; never submit this to the final round")
+        return config
 
     def _on_stop(self, request):
         try:
