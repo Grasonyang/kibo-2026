@@ -56,7 +56,7 @@ Claude 與 Codex 都用同一組三個標準角色：**planner**、**worker**、
 
 ## 新增或修改角色
 
-三個角色是標準，不隨專案增減。要改職責或權限時：
+三個角色是標準，不隨專案增減；另有 council 專用的 `council-member`（只作答、不裁決、不寫檔），見 `docs/agents/council.md`。要改職責或權限時：
 
 1. 先改本文件。
 2. 同步 `.codex/agents/<role>.toml` 與 `.claude/agents/<role>.md`。

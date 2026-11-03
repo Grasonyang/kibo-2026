@@ -32,6 +32,9 @@ Claude 與 Codex 都有三個標準 agent：planner、worker、reviewer。職責
 - 決賽程式要給 JAXA 審查安全性：迴圈要有次數與時間上限、Action 要有逾時與取消、不做無限重試（手冊第 5 章）。
 - 邏輯寫成純函式放 `src/kibo/` 並用 pytest 測；ROS 節點只做接線。
 
+## Council
+階段開始前開**開題 council**，每個階段結案後開**檢討 council**，卡住的設計開**設計 council**（`docs/agents/council.md`）。委員是 `council-member` subagent，平行啟動、匿名互評、主席查證後裁決；裁決寫成 Basic Memory decision，使用者確認前 `status: open`。
+
 ## 開發流程
 預設走 `docs/agents/workflow.md`：釐清、spec、tickets、實作（tdd）、審查、回顧。不跳階段。
 環境見 `docs/agents/dev-env.md`，驗證指令見下方「驗證指令」區塊。
