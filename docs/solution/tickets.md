@@ -11,6 +11,6 @@
 | T5 | 時間預算：leg 估時、來不及時依價值刪點、Goal 不刪 | 刻意設計來不及的案例 | done |
 | T6 | 任務狀態機 + `Robot` 介面 + 假機器人，整場跑完並算估計分數 | 假機器人全程通過；注入失敗時不卡死、重試有上限 | done |
 | T7 | ROS 接線層（照官方範本結構） | 本機只能過 vermin 與 ruff；實測等模擬器 | done（未實測） |
-| T8 | 零基礎文件 + Figma 圖 | `docs/solution/` 從比賽講起；圖有連結 | |
-| T9 | 點子清單與取捨 | `docs/solution/ideas.md` | |
+| T8 | 零基礎文件 + Figma 圖 | `docs/solution/` 從比賽講起；圖有連結 | done |
+| T9 | 點子清單與取捨 | `docs/solution/ideas.md` | done |
 | T10 | reviewer 審查（Standards、Spec 各一）與修正 | 審查報告無 blocker | |
