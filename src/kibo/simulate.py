@@ -8,14 +8,16 @@
 
 import argparse
 import sys
-from typing import List
+from typing import List, Tuple
 
 from kibo.fake_robot import FakeRobot, FakeRobotConfig
-from kibo.mission import DEFAULT_MISSION, MissionConfig, run_mission
+from kibo.mission import DEFAULT_MISSION, MissionConfig, MissionReport, run_mission
 from kibo.scenarios import random_checkpoints_message
 
 
-def run_once(seed: int, count: int, robot_cfg: FakeRobotConfig, mission_cfg: MissionConfig):
+def run_once(
+    seed: int, count: int, robot_cfg: FakeRobotConfig, mission_cfg: MissionConfig
+) -> Tuple[FakeRobot, MissionReport]:
     robot = FakeRobot(random_checkpoints_message(count, seed), robot_cfg, seed)
     report = run_mission(robot, mission_cfg)
     return robot, report
@@ -31,6 +33,10 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--speed", type=float, default=0.12, help="假機器人的真實線速度（m/s）")
     parser.add_argument("-v", "--verbose", action="store_true", help="印出每場的 log")
     args = parser.parse_args(argv)
+    if args.runs < 1:
+        parser.error("--runs must be at least 1")
+    if not 2 <= args.checkpoints <= 12:
+        parser.error("--checkpoints must be between 2 and 12")
 
     base = FakeRobotConfig()
     robot_cfg = base._replace(

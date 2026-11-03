@@ -11,7 +11,18 @@
 from typing import List, NamedTuple
 
 from kibo.checkpoints import Band, Checkpoint
-from kibo.geometry import Quat, Vec3, add, angle_between, distance, forward, roll_error, rotate, sub
+from kibo.geometry import (
+    Quat,
+    Vec3,
+    add,
+    angle_between,
+    distance,
+    forward,
+    look_at,
+    roll_error,
+    rotate,
+    sub,
+)
 
 CAMERA_OFFSET = (0.14, 0.0, 0.0)  # 機體座標系，公尺
 
@@ -47,6 +58,23 @@ def level_for(value: float, bands: List[Band]) -> int:
 
 def camera_position(pose: Pose) -> Vec3:
     return add(pose.position, rotate(pose.orientation, CAMERA_OFFSET))
+
+
+def target_attitude(checkpoint: Checkpoint) -> Quat:
+    """要用哪個姿態去 CheckPoint。
+
+    正常用伺服器給的 attitude。保險：若那個姿態從 CheckPoint 位置看 marker 的對中角
+    超過最嚴的餘裕（手冊範例是 0.0°，不該發生），就自己算一個「相機正對 marker、
+    滾轉盡量貼近伺服器姿態」的姿態。
+    """
+    probe = Pose(checkpoint.position, checkpoint.attitude)
+    to_marker = sub(checkpoint.marker_position, camera_position(probe))
+    centering = angle_between(forward(checkpoint.attitude), to_marker)
+    strictest = checkpoint.centering_bands[0].limit if checkpoint.centering_bands else 180.0
+    if centering <= strictest:
+        return checkpoint.attitude
+    # 從機體位置算：視線對準 marker 後，相機（在視線上前方 0.14 m）看 marker 也剛好對中。
+    return look_at(checkpoint.position, checkpoint.marker_position, reference=checkpoint.attitude)
 
 
 def judge(pose: Pose, checkpoint: Checkpoint) -> Judgement:

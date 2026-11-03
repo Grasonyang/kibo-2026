@@ -38,3 +38,14 @@ def test_rejects_mismatched_count():
     message["checkpoint_count"] = 5
     with pytest.raises(ValueError):
         parse_checkpoints(json.dumps(message))
+
+
+def test_structurally_broken_json_raises_value_error():
+    broken = json.loads(json.dumps(MANUAL_CHECKPOINT_1))
+    broken["position"] = [1.0, 2.0]
+    with pytest.raises(ValueError):
+        parse_checkpoints(checkpoints_message([broken, GOAL_12]))
+    with pytest.raises(ValueError):
+        parse_checkpoints('{"checkpoint_count": 1, "checkpoints": [5], "goalpoint_id": 5}')
+    with pytest.raises(ValueError):
+        parse_checkpoints("not json at all")

@@ -39,8 +39,8 @@
 | 讀清單 | 跟伺服器要 CheckPoint，解析成程式用的結構 | `src/kibo/checkpoints.py` |
 | 排順序 | 從起點出發、每點各去一次、終點收尾，總時間最短。點數最多 12，用精確解 | `src/kibo/planner.py` |
 | 看時間 | 估計整條路要多久，加上安全餘裕，超過剩餘時間就刪點；終點永不刪 | `src/kibo/budget.py` |
-| 移動 | 叫機器人飛到指定位置與姿態，失敗最多重試 2 次 | `src/kibo/mission.py` |
-| 自我檢查 | 用目前位置算三個條件各幾級，連續 3 次達標才算穩 | `src/kibo/judge.py` |
+| 移動 | 叫機器人飛到指定位置與姿態，每點最多嘗試 2 次 | `src/kibo/mission.py` |
+| 自我檢查 | 用目前位置算三個條件各幾級，連續 5 次（涵蓋 1 秒）達標才算穩；沒穩就再靠近一次 | `src/kibo/judge.py` |
 | 回報 | 告訴伺服器「我到了」，由伺服器給分 | `src/kibo/mission.py` |
 | 收尾 | 到終點、回報完成 | `src/kibo/mission.py` |
 
@@ -52,8 +52,8 @@
   可以在任何電腦用 `pytest` 測。
 - **ROS 接線層 `ros/user_node.py`**：ROS 是機器人的「作業系統」；這層把 ROS 的訊息翻譯成
   任務邏輯看得懂的東西，自己不做決定。只能在 JAXA 的模擬器裡跑。
-- **`Robot` 介面**（`src/kibo/mission.py`）：任務邏輯需要機器人做的事，只有八個方法
-  （現在幾點、我在哪、飛去那裡、睡一下、任務開始、要清單、回報通過、回報完成）。
+- **`Robot` 介面**（`src/kibo/mission.py`）：任務邏輯需要機器人做的事，八個必要方法
+  （現在幾點、我在哪、飛去那裡、睡一下、任務開始、要清單、回報通過、回報完成）加兩個選用的（有沒有人叫停、寫 log）。
   ROS 版實作一次，**假機器人**（`src/kibo/fake_robot.py`）再實作一次。
 
 為什麼要假機器人：沒有模擬器的電腦也能把整場任務跑完，看流程會不會卡、策略參數
@@ -66,7 +66,7 @@
 
 ```bash
 uv sync --locked                                  # 第一次：裝工具
-uv run pytest                                     # 42 個測試，約 0.3 秒
+uv run pytest                                     # 55 個測試，約 0.3 秒
 uv run python -m kibo.simulate --runs 10 --checkpoints 8        # 本機「資格賽」
 uv run python -m kibo.simulate --runs 1 --checkpoints 6 -v      # 看一場的逐步 log
 uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08   # 刁難它
@@ -78,13 +78,17 @@ uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08
 [ 300.0s left] 6 checkpoints, goal #12
 [ 300.0s left] route [1, 2, 3, 5, 10, 12] (~204s)      ← 排好順序，估計 204 秒
 [ 278.6s left] move to #1 attempt 1: success
-[ 278.0s left] at #1: dist=0.06m centering=1.0 roll=0.0 -> Lv3   ← 自我檢查三項
-[ 277.0s left] checkpoint #1 accepted                   ← 伺服器收了
+[ 277.6s left] at #1: dist=0.05m centering=1.6 roll=0.0 -> Lv3 (stable)   ← 自我檢查三項，連續達標
+[ 276.6s left] checkpoint #1 accepted                   ← 伺服器收了
 ...
-[ 140.6s left] at #12: dist=0.08m centering=14.8 roll=0.0 -> Lv2  ← 對中差了
-[ 136.4s left] refined #12 -> Lv3                       ← 再靠近一次就好
-[ 135.4s left] mission finished: True
+[ 144.1s left] move to #12 attempt 1: success
+[ 143.1s left] at #12: dist=0.03m centering=4.9 roll=1.3 -> Lv3 (stable)
+[ 142.1s left] checkpoint #12 accepted
+[ 142.1s left] mission finished: True
 ```
+
+沒穩的時候會多兩行：`-> Lv2 (unstable)` 之後再 `move`，然後 `refined: at #12: ... -> Lv3 (stable)`。
+
 
 要跑**真的**模擬器，需要 JAXA 的開發資源包（隊伍帳號登入下載），步驟在
 [docs/kibo/simulator.md](../kibo/simulator.md)。
@@ -100,6 +104,8 @@ uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08
 | Lv3/2/1 = 10/6/3 分、Goal 20 分、倍率線性 1 到 2 | `scoring.py` | Web 模擬器的結果 JSON |
 | 對中用「相機位置」算（相機在機頭前 14 cm） | `judge.py` | 比較我們 log 的 Lv 與結果 JSON 的 level |
 | CheckPoint 離 marker 0.4 到 0.7 m、偏法線 ≤ 20° | `scenarios.py` | 看幾場真實的 `cheat_sheet.json` |
+| **放棄中途點後，到 Goal 仍有 Goal 分數**（規則書附錄 #20 字面是「passes all CheckPoints」） | `budget.py` | 故意漏一點，看結果 JSON 的 `goal.success` |
+| 計時起點 = `/ib2_user/start` 到來的時刻（規則說是 Release 完成） | `mission.py` 的 `t0` | 比對結果 JSON 的 `duration_sec` 與我們 log 的 elapsed |
 
 一個已經確定的事：手冊給的範例姿態，用我們的算法算出來「正對 marker、誤差 0.0°」，
 所以座標與四元數的慣例是對的（`tests/test_geometry.py`）。

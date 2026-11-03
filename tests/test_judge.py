@@ -66,3 +66,30 @@ def test_overall_level_is_the_lowest_of_the_three(cp1):
     rolled = quat_mul(cp1.attitude, body_rotation((1.0, 0.0, 0.0), 25.0))  # roll Lv1
     pose = Pose(add(cp1.position, scale((1.0, 0.0, 0.0), 0.12)), rolled)  # position Lv2
     assert judge(pose, cp1).level == 1
+
+
+def test_value_exactly_on_a_band_limit_gets_that_level():
+    from kibo.checkpoints import Band
+    from kibo.judge import level_for
+
+    bands = [Band(0.1, 3), Band(0.2, 2), Band(0.3, 1)]
+    assert level_for(0.1, bands) == 3
+    assert level_for(0.1000001, bands) == 2
+    assert level_for(0.3, bands) == 1
+    assert level_for(0.3000001, bands) == 0
+
+
+def test_target_attitude_keeps_server_attitude_when_it_points_at_marker(cp1):
+    from kibo.judge import target_attitude
+
+    assert target_attitude(cp1) == cp1.attitude
+
+
+def test_target_attitude_falls_back_to_look_at_when_server_attitude_is_off(cp1):
+    from kibo.judge import target_attitude
+
+    pointing_away = quat_mul(cp1.attitude, body_rotation((0.0, 0.0, 1.0), 90.0))
+    broken = cp1._replace(attitude=pointing_away)
+    fixed = target_attitude(broken)
+    assert fixed != pointing_away
+    assert judge(Pose(broken.position, fixed), broken).centering_level == 3

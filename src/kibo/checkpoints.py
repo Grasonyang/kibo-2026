@@ -83,15 +83,18 @@ def parse_checkpoint(raw: Dict) -> Checkpoint:
 
 
 def parse_checkpoints(message: str) -> CheckpointSet:
-    """`message` 是 CheckPoints.srv 回應裡的 JSON 字串。"""
-    data = json.loads(message)
-    checkpoints = [parse_checkpoint(raw) for raw in data["checkpoints"]]
+    """`message` 是 CheckPoints.srv 回應裡的 JSON 字串。任何格式問題都以 ValueError 丟出。"""
+    try:
+        data = json.loads(message)
+        checkpoints = [parse_checkpoint(raw) for raw in data["checkpoints"]]
+        goal_id = int(data["goalpoint_id"])
+    except (KeyError, TypeError, IndexError, AttributeError) as exc:
+        raise ValueError("unexpected checkpoints structure: %r" % (exc,)) from exc
     declared = int(data.get("checkpoint_count", len(checkpoints)))
     if declared != len(checkpoints):
         raise ValueError(
             "checkpoint_count=%d but %d checkpoints listed" % (declared, len(checkpoints))
         )
-    goal_id = int(data["goalpoint_id"])
     if all(cp.id != goal_id for cp in checkpoints):
         raise ValueError("goalpoint_id=%d is not one of the checkpoints" % goal_id)
     return CheckpointSet(checkpoints=checkpoints, goal_id=goal_id)

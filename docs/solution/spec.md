@@ -1,6 +1,6 @@
 # Spec：第 7 屆 Kibo-RPC 資格賽解法
 
-狀態：draft，2026-11-04。由 Claude 在使用者不在場時以 `to-spec` 格式整理；seam 由 Claude 代為決定，列在「測試決策」，使用者回來後可以推翻。
+狀態：draft，2026-11-04；同日依 reviewer（Standards、Spec 兩軸）的審查更新為實作現況。由 Claude 在使用者不在場時以 `to-spec` 格式整理；seam 由 Claude 代為決定，列在「測試決策」，使用者回來後可以推翻。
 
 ## 問題
 
@@ -40,15 +40,16 @@
 - **座標與姿態**：位置用 `(x, y, z)` 公尺，姿態用四元數 `(x, y, z, w)`，與規則書和 ROS 一致。相機視線是機體 +X。自己實作四元數運算（旋轉向量、共軛、相乘、兩向量夾角），不依賴 `tf` 或 `scipy`，因為 3.6 映像裡不一定有。
 - **CheckPoint 資料**：`get_checkpoints` 的 JSON 解析成具名結構；bands 依 level 由嚴到寬排序；`goalpoint_id` 指向其中一個 CheckPoint，當作終點。
 - **路線**：Held-Karp 動態規劃（n ≤ 12，狀態 2^12 × 12，毫秒級），從起點出發、經過所有非 Goal 點、以 Goal 結束。成本先用直線距離加上轉向角的時間換算；之後若模擬器顯示速度模型不同，只需要改成本函式。
-- **目標姿態**：優先用伺服器給的 `attitude.quaternion`，但用自己的幾何檢查它是否真的對準 marker；若夾角超過 Lv3 餘裕，改用「相機指向 marker、滾轉盡量貼近給定姿態」的姿態。這是對伺服器資料的保險，不是主要路徑。
-- **到點判定（本機）**：以 nav 的實際姿態算三項指標與對應的 Lv；只有三項都達到目標 Lv 且連續 N 次取樣穩定才送通過通知。目標 Lv 預設 3，時間吃緊時可降到 2。
-- **時間預算**：`TIME_LIMIT_SEC = 300`，保留固定安全餘裕（預設 20 秒）給 Goal 與回報。每個 leg 的估計時間 = 距離 ÷ 速度 + 轉角 ÷ 角速度 + 穩定時間。來不及時依「分數 ÷ 估計時間」刪點，刪到來得及為止；Goal 永不刪。
-- **任務狀態機**：`PLAN → MOVE → SETTLE → VERIFY → NOTIFY →（下一點）→ GOAL → FINISH`，失敗分支有重試上限。狀態機不呼叫 ROS，只呼叫 `Robot` 介面。
-- **`Robot` 介面**（抽象類別）：`move_to(pose, timeout) -> MoveResult`、`pose() -> Pose`、`notify_checkpoint(id) -> bool`、`notify_finish() -> bool`、`now() -> float`。ROS 版與假機器人版各實作一次。
+- **目標姿態**：優先用伺服器給的 `attitude.quaternion`，但用自己的幾何檢查它是否真的對準 marker；若對中角超過最嚴的餘裕，改用「相機指向 marker、滾轉盡量貼近給定姿態」的姿態（從機體位置算 `look_at`，相機在視線上所以同樣對中）。這是對伺服器資料的保險，手冊範例是 0.0°，正常不會觸發。
+- **到點判定（本機）**：以 nav 的實際姿態算三項指標與對應的 Lv。連續 5 次取樣（間隔 0.25 秒，涵蓋規則要求的 1 秒）都達到目標 Lv 才算**穩定**；目標 Lv 預設 3，剩餘時間少於 40 秒降到 1。穩定就回報。沒穩定（逾時 6 秒）時用**最後一次**判定：有時間就再移動一次（只一次）再穩定；最後一次判定至少 Lv1 仍回報（伺服器才是裁判，不回報一定 0 分），並在紀錄標 unstable；整段期間都沒有導航資料就不回報，因為不知道自己在哪。
+- **時間預算**：`TIME_LIMIT_SEC = 300`，保留固定安全餘裕（預設 25 秒）給 Goal 與回報。每個 leg 的估計時間 = 距離 ÷ 速度 + 轉角 ÷ 角速度 + 穩定時間（8 秒）。來不及時刪「拿掉它省最多秒」的點（各點分數相同，所以等價於分數 ÷ 時間），刪到來得及為止；Goal 永不刪。**假設**：刪掉中途點後到達 Goal 仍有 Goal 分數；規則書附錄 #20 字面是「passes all CheckPoints」，第一次模擬器要驗。
+- **時間起點**：t0 取 `/ib2_user/start` 到來的時刻。規則書說計時從 Release 完成起算；若 start 比 Release 晚，剩餘時間會被高估，待模擬器用結果 JSON 的 `duration_sec` 校正；校正前不把 `margin_sec` 往下調。
+- **任務狀態機**：`PLAN → MOVE → SETTLE →（REFINE）→ NOTIFY →（下一點）→ GOAL → FINISH`，失敗分支有重試上限：移動每點最多嘗試 2 次（`MOVE_INVALID` 不重試）、回報最多 2 次、取清單最多 3 次。狀態機不呼叫 ROS，只呼叫 `Robot` 介面。
+- **`Robot` 介面**（抽象類別）：八個必要方法 `now`、`pose`（沒資料回 None）、`move_to(pose, timeout) -> 字串常數 MOVE_SUCCESS/TIMEOUT/ABORTED/INVALID`、`sleep`、`mission_start`、`get_checkpoints_message`、`notify_checkpoint`、`mission_finish`，加兩個選用 `stop_requested`、`log`。ROS 版與假機器人版各實作一次。ROS 版的服務呼叫放在 daemon thread 裡用 Event 等，因為 `ServiceProxy` 本身沒有逾時。
 - **假機器人**：等速直線加等角速度轉動的簡化模型，可注入位置雜訊與偶發失敗，並依 bands 判 Lv 算分，讓策略比較有數字可看。它不是物理模擬，分數只能做相對比較。
 - **ROS 接線層**：照官方範本結構（`/ib2_user/start`、`/ib2_user/stop`、`/ib2_user/ready` 保留），`Robot` 的每個方法對應一個 action 或 service，全部有逾時與取消。
 - **影像**：第一版不做自己的 ArUco 位姿估計，因為伺服器的判定用的是 nav 位置與姿態，不是我們的影像結果。影像留作第二版的「到點後微調」。
-- **Log**：每個階段一行，內容固定：階段、目標、實際、剩餘秒數。
+- **Log**：每個階段一行，開頭固定是剩餘秒數，後面是階段與數字（路線與估時、移動結果、三項指標與 Lv、是否穩定、回報結果）。
 
 ## 測試決策
 

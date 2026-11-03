@@ -13,4 +13,4 @@
 | T7 | ROS 接線層（照官方範本結構） | 本機只能過 vermin 與 ruff；實測等模擬器 | done（未實測） |
 | T8 | 零基礎文件 + Figma 圖 | `docs/solution/` 從比賽講起；圖有連結 | done |
 | T9 | 點子清單與取捨 | `docs/solution/ideas.md` | done |
-| T10 | reviewer 審查（Standards、Spec 各一）與修正 | 審查報告無 blocker | |
+| T10 | reviewer 審查（Standards、Spec 各一）與修正 | 審查報告無 blocker | done：無 blocker；3+4 個 major 全修，minor/nit 修完；補 13 個測試 |

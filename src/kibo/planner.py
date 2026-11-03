@@ -47,6 +47,9 @@ def leg_seconds(
 
 CostFn = Callable[[Vec3, Quat, Vec3, Quat], float]
 
+# 規則書最多 12 個 CheckPoint，其中一個是 Goal；再多 Held-Karp 的狀態數會爆。
+MAX_WAYPOINTS = 11
+
 
 def plan_route(
     start_pos: Vec3,
@@ -58,7 +61,7 @@ def plan_route(
     """回傳成本最小的順序。waypoints 可以是空的（只去 Goal）。"""
     cost_fn = cost or leg_seconds
     n = len(waypoints)
-    if n > 16:
+    if n > MAX_WAYPOINTS:
         raise ValueError("too many waypoints for exact search: %d" % n)
 
     # best[mask][i] = 從起點出發、拜訪 mask 裡的點、最後停在 waypoints[i] 的最小成本
@@ -101,7 +104,9 @@ def plan_route(
         order_idx: List[int] = []
         mask = full
         i: Optional[int] = last
-        while i is not None:
+        for _ in range(n):  # parent 鏈最長 n 步
+            if i is None:
+                break
             order_idx.append(i)
             prev = parent[(mask, i)]
             mask &= ~(1 << i)

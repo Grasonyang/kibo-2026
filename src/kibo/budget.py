@@ -4,23 +4,26 @@
 也不能讓 Goal 來不及。這裡的規則：
 
 1. 先規劃全部剩餘點的路線，估計總秒數（每段移動 + 每點穩定時間）。
-2. 加上安全餘裕後若超過剩餘時間，就刪掉「每分每秒最不划算」的點，重算。
+2. 加上安全餘裕後若超過剩餘時間，就刪掉「拿掉它能省最多秒」的點，重算。
+   每個點的分數一樣（都以 Lv3 為目標），所以省秒數就是唯一的排序依據。
 3. Goal 永遠不刪。
+
+假設（待模擬器驗證）：刪掉中途點之後，到達 Goal 仍然有 Goal 分數。規則書附錄 #20
+的字面是「passes all CheckPoints ... and reaches the GoalPoint」，若 Goal 分數要求全數通過，
+這個策略要改成「只刪到時間剛好」或完全不刪。
 """
 
-from typing import List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple
 
 from kibo.checkpoints import Checkpoint
 from kibo.geometry import Quat, Vec3
 from kibo.planner import DEFAULT_SPEEDS, Route, Speeds, leg_seconds, plan_route
-from kibo.scoring import DEFAULT_SCORING, Scoring
 
 
 class BudgetConfig(NamedTuple):
     settle_sec: float = 8.0  # 每個點到位後穩定並等伺服器判定的時間
     margin_sec: float = 25.0  # 留給 Goal 與完成回報的保險
     speeds: Speeds = DEFAULT_SPEEDS
-    scoring: Scoring = DEFAULT_SCORING
 
 
 DEFAULT_BUDGET = BudgetConfig()
@@ -37,15 +40,21 @@ def estimated_seconds(route: Route, settle_sec: float) -> float:
     return route.seconds + settle_sec * len(route.order)
 
 
-def _marginal_seconds(
-    route: Route, by_id, start_pos: Vec3, start_att: Quat, speeds: Speeds, settle_sec: float
-):
+def _savings(
+    route: Route,
+    by_id: Dict[int, Checkpoint],
+    start_pos: Vec3,
+    start_att: Quat,
+    speeds: Speeds,
+    settle_sec: float,
+) -> Dict[int, float]:
     """沿目前路線，每個中途點「拿掉它能省多少秒」。"""
-    pos, att = start_pos, start_att
     stops = [by_id[cp_id] for cp_id in route.order]
-    savings = {}
+    savings: Dict[int, float] = {}
     for i, cp in enumerate(stops[:-1]):  # 最後一個是 Goal，不算
-        before = (pos, att) if i == 0 else (stops[i - 1].position, stops[i - 1].attitude)
+        before = (
+            (start_pos, start_att) if i == 0 else (stops[i - 1].position, stops[i - 1].attitude)
+        )
         after = stops[i + 1]
         with_cp = leg_seconds(before[0], before[1], cp.position, cp.attitude, speeds) + leg_seconds(
             cp.position, cp.attitude, after.position, after.attitude, speeds
@@ -62,30 +71,23 @@ def plan_within_budget(
     goal: Checkpoint,
     remaining_sec: float,
     config: BudgetConfig = DEFAULT_BUDGET,
-    target_level: int = 3,
 ) -> Plan:
     """回傳在剩餘時間內做得完的計畫。可能放棄一些點，但一定包含 Goal。"""
     remaining = list(waypoints)
     dropped: List[int] = []
     by_id = {cp.id: cp for cp in waypoints}
     by_id[goal.id] = goal
-    points = config.scoring.points_for_level(target_level)
 
     def cost(a_pos, a_att, b_pos, b_att):
         return leg_seconds(a_pos, a_att, b_pos, b_att, config.speeds)
 
     route = plan_route(start_pos, start_att, remaining, goal, cost)
-    for _ in range(len(waypoints) + 1):  # 每輪最多刪一點，所以迴圈有上限
+    for _ in range(len(waypoints)):  # 每輪刪一點，所以最多 len(waypoints) 輪
         est = estimated_seconds(route, config.settle_sec)
         if est + config.margin_sec <= remaining_sec or not remaining:
-            return Plan(route, dropped, est)
-        savings = _marginal_seconds(
-            route, by_id, start_pos, start_att, config.speeds, config.settle_sec
-        )
-        # 每一分要花最多秒的那個點最不划算；分數都一樣時就是省最多秒的。
-        victim: Optional[int] = max(savings, key=lambda cp_id: savings[cp_id] / max(points, 1e-9))
-        if victim is None:
             break
+        savings = _savings(route, by_id, start_pos, start_att, config.speeds, config.settle_sec)
+        victim = max(savings, key=lambda cp_id: savings[cp_id])
         dropped.append(victim)
         remaining = [cp for cp in remaining if cp.id != victim]
         route = plan_route(start_pos, start_att, remaining, goal, cost)

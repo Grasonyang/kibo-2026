@@ -21,3 +21,6 @@
 - `Navigation.pose.header.stamp` 是否有值；沒有的話 `pose()` 會因為「太舊」永遠回 None，要改成不檢查新鮮度。
 - `judge.py` 的相機位置假設：伺服器判對中是用機體中心還是相機？看 Web 結果 JSON 的 level 與我們 log 的 Lv 是否一致。
 - `Speeds`（規劃用的速度）與實際移動時間；用 log 裡每段 move 的秒數校正。
+- 計時起點：我們的 t0 是 `/ib2_user/start` 到來的時刻。比對結果 JSON 的 `mission.start`、`duration_sec` 與 log 的 elapsed；若伺服器起算得更早，調大 `MissionConfig` 的保險或把 t0 往前推。
+- 刪點後 Goal 是否仍給分：故意只去一半的點，看結果 JSON 的 `goal.success` 與 Goal Score。
+- 服務呼叫用 daemon thread 加 `Event.wait` 做逾時（`_call`）；確認逾時後任務能繼續、節點能正常結束。

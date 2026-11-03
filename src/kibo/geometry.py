@@ -10,14 +10,14 @@ ROS 的 tf 又要在節點裡才能用。這裡只需要幾個很小的運算，
 """
 
 import math
-from typing import Sequence, Tuple
+from typing import Tuple
 
 Vec3 = Tuple[float, float, float]
 Quat = Tuple[float, float, float, float]
 
-IDENTITY_QUAT = (0.0, 0.0, 0.0, 1.0)  # type: Quat
-FORWARD = (1.0, 0.0, 0.0)  # type: Vec3
-UP = (0.0, 0.0, 1.0)  # type: Vec3
+IDENTITY_QUAT: Quat = (0.0, 0.0, 0.0, 1.0)
+FORWARD: Vec3 = (1.0, 0.0, 0.0)
+UP: Vec3 = (0.0, 0.0, 1.0)
 
 
 def sub(a: Vec3, b: Vec3) -> Vec3:
@@ -60,8 +60,11 @@ def normalize(v: Vec3) -> Vec3:
 
 
 def angle_between(a: Vec3, b: Vec3) -> float:
-    """兩向量的夾角，單位是度。"""
-    c = dot(a, b) / (norm(a) * norm(b))
+    """兩向量的夾角，單位是度。任一向量為零時方向無定義，回 180 當作最差。"""
+    denominator = norm(a) * norm(b)
+    if denominator == 0.0:
+        return 180.0
+    c = dot(a, b) / denominator
     return math.degrees(math.acos(max(-1.0, min(1.0, c))))
 
 
@@ -156,12 +159,3 @@ def roll_error(actual: Quat, target: Quat) -> float:
             return 0.0
         projected.append(p)
     return angle_between(projected[0], projected[1])
-
-
-def centroid(points: Sequence[Vec3]) -> Vec3:
-    n = float(len(points))
-    return (
-        sum(p[0] for p in points) / n,
-        sum(p[1] for p in points) / n,
-        sum(p[2] for p in points) / n,
-    )

@@ -4,8 +4,6 @@ from kibo.checkpoints import Checkpoint
 from kibo.geometry import IDENTITY_QUAT
 from kibo.planner import Speeds, leg_seconds, plan_route
 
-EASY_BANDS = []  # 規劃不看 bands
-
 
 def cp(cp_id, position, attitude=IDENTITY_QUAT):
     return Checkpoint(cp_id, position, position, IDENTITY_QUAT, attitude, [], [], [])
@@ -48,8 +46,8 @@ def test_turning_cost_changes_the_order():
 def test_twelve_waypoints_plan_in_under_a_second():
     waypoints = [cp(i, (float(i % 4), float(i // 4), float(i % 3))) for i in range(1, 12)]
     goal = cp(12, (0.0, 0.0, 0.0))
-    started = time.time()
+    started = time.perf_counter()
     route = plan_route((0.2, 0.0, 0.0), IDENTITY_QUAT, waypoints, goal)
-    assert time.time() - started < 1.0
+    assert time.perf_counter() - started < 1.0
     assert sorted(route.order) == list(range(1, 13))
     assert route.order[-1] == 12

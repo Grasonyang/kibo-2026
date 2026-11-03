@@ -7,6 +7,8 @@ Mag_clear 依剩餘時間，最大約 2 倍。各 Lv 的點數與倍率曲線沒
 
 from typing import Dict, NamedTuple
 
+from kibo.field import TIME_LIMIT_SEC
+
 
 class Scoring(NamedTuple):
     level_points: Dict[int, float]
@@ -33,5 +35,5 @@ DEFAULT_SCORING = Scoring(
     level_points={3: 10.0, 2: 6.0, 1: 3.0},
     goal_points=20.0,
     max_multiplier=2.0,
-    time_limit_sec=300.0,
+    time_limit_sec=float(TIME_LIMIT_SEC),
 )

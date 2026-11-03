@@ -1,3 +1,5 @@
+import pytest
+
 from kibo.fake_robot import FakeRobot, FakeRobotConfig
 from kibo.mission import DEFAULT_MISSION, run_mission
 from kibo.planner import Speeds
@@ -19,7 +21,9 @@ def test_perfect_robot_passes_every_checkpoint_at_level_3(three_point_message):
 def test_score_rewards_remaining_time(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)
-    # 三個 Lv3（30 分）加 Goal（20 分），再乘上 1 到 2 之間的倍率。
+    # 三個 Lv3（30 分）加 Goal（20 分），再乘上「1 + 剩餘比例」的倍率。
+    expected = 50.0 * (1.0 + robot.remaining_at_finish() / 300.0)
+    assert robot.score() == pytest.approx(expected)
     assert 50.0 < robot.score() <= 100.0
 
 

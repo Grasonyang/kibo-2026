@@ -17,6 +17,7 @@ import threading
 
 import actionlib
 import rospy
+from actionlib_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
 from ib2_msgs.msg import (
     CtlCommandAction,
@@ -41,17 +42,24 @@ from kibo.mission import (
     run_mission,
 )
 
-SERVICE_TIMEOUT_SEC = 10.0
+SERVICE_TIMEOUT_SEC = 10.0  # 等服務出現，以及等它回應，各自的上限
 ACTION_SERVER_TIMEOUT_SEC = 10.0
+NOTIFY_TIMEOUT_SEC = 15.0
+CANCEL_WAIT_SEC = 5.0
 NAV_FRESH_SEC = 1.0  # 導航資料比這舊就當作沒有
 POLL_SEC = 0.2
+
+ACTION_DONE = "done"
+ACTION_TIMEOUT = "timeout"
+ACTION_STOPPED = "stopped"
 
 
 class RosRobot(Robot):
     def __init__(self):
         self._nav = None  # 最新的 Navigation 訊息
         self._nav_lock = threading.Lock()
-        self._stop = False
+        self._stop = threading.Event()
+        self._active_lock = threading.Lock()
         self._active_goals = []  # 正在執行的 action client，停止時要取消
 
         self._command = actionlib.SimpleActionClient("/ctl/command", CtlCommandAction)
@@ -74,7 +82,7 @@ class RosRobot(Robot):
         rospy.loginfo(message)
 
     def stop_requested(self):
-        return self._stop or rospy.is_shutdown()
+        return self._stop.is_set() or rospy.is_shutdown()
 
     def pose(self):
         with self._nav_lock:
@@ -96,9 +104,11 @@ class RosRobot(Robot):
             target=self._pose_stamped(target),
             type=CtlStatusType(type=CtlStatusType.MOVE_TO_ABSOLUTE_TARGET),
         )
-        result = self._run_action(self._command, goal, timeout_sec)
-        if result is None:
+        status, result = self._run_action(self._command, goal, timeout_sec)
+        if status == ACTION_TIMEOUT:
             return MOVE_TIMEOUT
+        if status == ACTION_STOPPED or result is None:
+            return MOVE_ABORTED  # 被停止、被拒絕，或 server 沒帶 result
         if result.type == CtlCommandResult.TERMINATE_SUCCESS:
             return MOVE_SUCCESS
         if result.type in (
@@ -129,8 +139,9 @@ class RosRobot(Robot):
             rospy.logerr("/event/checkpoint_passed server unavailable")
             return False
         goal = CheckpointPassedGoal(checkpoint_id=checkpoint_id)
-        result = self._run_action(self._checkpoint, goal, timeout_sec=15.0)
-        if result is None:
+        status, result = self._run_action(self._checkpoint, goal, NOTIFY_TIMEOUT_SEC)
+        if status != ACTION_DONE or result is None:
+            rospy.logwarn("checkpoint_passed #%d: %s", checkpoint_id, status)
             return False
         rospy.loginfo(
             "checkpoint_passed #%d: success=%s %s", checkpoint_id, result.success, result.message
@@ -140,12 +151,14 @@ class RosRobot(Robot):
     # ---- 給節點用 ----
     def request_stop(self):
         """停止要求：取消所有執行中的 action，等它們結束。"""
-        self._stop = True
-        for client in list(self._active_goals):
+        self._stop.set()
+        with self._active_lock:
+            clients = list(self._active_goals)
+        for client in clients:
             try:
                 client.cancel_goal()
-                client.wait_for_result(rospy.Duration(5.0))
-            except Exception as exc:  # noqa: BLE001 - 停止流程不能因例外中斷
+                client.wait_for_result(rospy.Duration(CANCEL_WAIT_SEC))
+            except Exception as exc:  # 停止流程不能因任何例外中斷
                 rospy.logwarn("cancel failed: %s", exc)
 
     # ---- 內部 ----
@@ -168,37 +181,75 @@ class RosRobot(Robot):
         return msg
 
     def _call(self, proxy, name):
+        """呼叫服務，等服務出現與等它回應都有上限。
+
+        ServiceProxy 本身沒有逾時，server 收了請求不回應會永遠阻塞，所以放到
+        daemon thread 裡用 Event 等；逾時就回 None（那個 thread 會留在背景，
+        但不會擋住任務）。
+        """
         try:
             rospy.wait_for_service(name, timeout=SERVICE_TIMEOUT_SEC)
-            return proxy()
-        except (rospy.ROSException, rospy.ServiceException) as exc:
-            rospy.logerr("%s failed: %s", name, exc)
+        except rospy.ROSException as exc:
+            rospy.logerr("%s unavailable: %s", name, exc)
             return None
 
+        box = {}
+        done = threading.Event()
+
+        def worker():
+            try:
+                box["result"] = proxy()
+            except rospy.ServiceException as exc:
+                box["error"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=worker, name=name, daemon=True).start()
+        if not done.wait(SERVICE_TIMEOUT_SEC):
+            rospy.logerr("%s did not respond within %.0fs", name, SERVICE_TIMEOUT_SEC)
+            return None
+        if "error" in box:
+            rospy.logerr("%s failed: %s", name, box["error"])
+            return None
+        return box.get("result")
+
     def _run_action(self, client, goal, timeout_sec):
-        """送出 goal，輪詢到完成、逾時或停止；逾時與停止都會取消。回傳 result 或 None。"""
+        """送出 goal，輪詢到完成、逾時或停止；逾時與停止都會取消。
+
+        回傳 (狀態, result)。狀態是 ACTION_DONE、ACTION_TIMEOUT 或 ACTION_STOPPED；
+        goal 被拒絕時狀態是 ACTION_DONE 但 result 為 None。
+        """
         client.send_goal(goal)
-        self._active_goals.append(client)
+        with self._active_lock:
+            self._active_goals.append(client)
         deadline = rospy.get_time() + timeout_sec
         max_polls = int(timeout_sec / POLL_SEC) + 2
         try:
             for _ in range(max_polls):
                 if client.wait_for_result(rospy.Duration(POLL_SEC)):
-                    return client.get_result()
-                if self.stop_requested() or rospy.get_time() > deadline:
+                    if client.get_state() == GoalStatus.REJECTED:
+                        return ACTION_DONE, None
+                    return ACTION_DONE, client.get_result()
+                if self.stop_requested():
                     break
+                if rospy.get_time() > deadline:
+                    client.cancel_goal()
+                    client.wait_for_result(rospy.Duration(CANCEL_WAIT_SEC))
+                    return ACTION_TIMEOUT, None
             client.cancel_goal()
-            client.wait_for_result(rospy.Duration(5.0))
-            return None
+            client.wait_for_result(rospy.Duration(CANCEL_WAIT_SEC))
+            return ACTION_STOPPED, None
         finally:
-            if client in self._active_goals:
-                self._active_goals.remove(client)
+            with self._active_lock:
+                if client in self._active_goals:
+                    self._active_goals.remove(client)
 
 
 class UserNode(object):
     def __init__(self):
         self._robot = RosRobot()
         self._started = False
+        self._start_lock = threading.Lock()
         # DO NOT REMOVE THESE THREE LINES（官方範本要求）
         self._start_sub = rospy.Subscriber("/ib2_user/start", UserLogic, self._on_start)
         self._stop_srv = rospy.Service("/ib2_user/stop", StopProcessingUserNode, self._on_stop)
@@ -206,15 +257,16 @@ class UserNode(object):
         rospy.loginfo("kibo user node ready")
 
     def _on_start(self, msg):
-        if self._started:
-            rospy.logwarn("start already processed")
-            return
-        self._started = True
+        with self._start_lock:
+            if self._started:
+                rospy.logwarn("start already processed")
+                return
+            self._started = True
         rospy.loginfo("start %s", msg)
         try:
             report = run_mission(self._robot, DEFAULT_MISSION)
             rospy.loginfo("mission report: %s", report)
-        except Exception as exc:  # noqa: BLE001 - 任何例外都不能讓節點靜悄悄死掉
+        except Exception as exc:  # 任何例外都不能讓節點靜悄悄死掉
             rospy.logerr("mission failed: %s", exc)
 
     def _on_stop(self, request):
@@ -222,7 +274,7 @@ class UserNode(object):
             self._robot.request_stop()
             rospy.loginfo("stop processing done")
             return StopProcessingUserNodeResponse(result=StopProcessingUserNodeResponse.SUCCESS)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             rospy.logerr("stop processing failed: %s", exc)
             return StopProcessingUserNodeResponse(result=StopProcessingUserNodeResponse.ERROR)
 
