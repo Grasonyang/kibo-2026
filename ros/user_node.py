@@ -343,8 +343,12 @@ class UserNode(object):
         try:
             report = run_mission(self._robot, DEFAULT_MISSION)
             rospy.loginfo("mission report: %s", report)
-        except Exception as exc:  # 任何例外都不能讓節點靜悄悄死掉
+        except Exception as exc:  # 任何例外都不能讓節點靜悄悄死掉，也不能沒有完成回報
             rospy.logerr("mission failed: %s", exc)
+            try:
+                rospy.logwarn("mission_finished after failure: %s", self._robot.mission_finish())
+            except Exception as finish_exc:
+                rospy.logerr("mission_finished also failed: %s", finish_exc)
 
     def _on_stop(self, request):
         try:

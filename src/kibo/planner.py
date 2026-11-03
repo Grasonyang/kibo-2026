@@ -51,6 +51,72 @@ CostFn = Callable[[Vec3, Quat, Vec3, Quat], float]
 MAX_WAYPOINTS = 11
 
 
+def _nearest_neighbour(
+    start_pos: Vec3, start_att: Quat, waypoints: List[Checkpoint], cost_fn: CostFn
+) -> List[int]:
+    """點太多無法精確解時的退路：每次去最近的一點。"""
+    remaining = list(waypoints)
+    order: List[int] = []
+    pos, att = start_pos, start_att
+    for _ in range(len(waypoints)):
+        nearest = min(remaining, key=lambda cp: cost_fn(pos, att, cp.position, cp.attitude))
+        order.append(nearest.id)
+        remaining.remove(nearest)
+        pos, att = nearest.position, nearest.attitude
+    return order
+
+
+def _held_karp(
+    start_pos: Vec3, start_att: Quat, waypoints: List[Checkpoint], goal: Checkpoint, cost_fn: CostFn
+) -> List[int]:
+    """精確解。成本先算成矩陣，DP 裡只查表，n=11 時少掉約 5 萬次幾何運算。"""
+    n = len(waypoints)
+    from_start = [cost_fn(start_pos, start_att, wp.position, wp.attitude) for wp in waypoints]
+    to_goal = [cost_fn(wp.position, wp.attitude, goal.position, goal.attitude) for wp in waypoints]
+    between = [
+        [
+            0.0 if i == j else cost_fn(a.position, a.attitude, b.position, b.attitude)
+            for j, b in enumerate(waypoints)
+        ]
+        for i, a in enumerate(waypoints)
+    ]
+
+    # best[(mask, i)] = 從起點出發、拜訪 mask 裡的點、最後停在 waypoints[i] 的最小成本
+    best: Dict[Tuple[int, int], float] = {}
+    parent: Dict[Tuple[int, int], Optional[int]] = {}
+    for i in range(n):
+        best[(1 << i, i)] = from_start[i]
+        parent[(1 << i, i)] = None
+    for mask in range(1, 1 << n):
+        for i in range(n):
+            if (mask, i) not in best:
+                continue
+            base = best[(mask, i)]
+            row = between[i]
+            for j in range(n):
+                if mask & (1 << j):
+                    continue
+                key = (mask | (1 << j), j)
+                candidate = base + row[j]
+                if candidate < best.get(key, float("inf")):
+                    best[key] = candidate
+                    parent[key] = i
+
+    full = (1 << n) - 1
+    last = min(range(n), key=lambda i: best[(full, i)] + to_goal[i])
+    order_idx: List[int] = []
+    mask = full
+    i: Optional[int] = last
+    for _ in range(n):  # parent 鏈最長 n 步
+        if i is None:
+            break
+        order_idx.append(i)
+        prev = parent[(mask, i)]
+        mask &= ~(1 << i)
+        i = prev
+    return [waypoints[k].id for k in reversed(order_idx)]
+
+
 def plan_route(
     start_pos: Vec3,
     start_att: Quat,
@@ -58,60 +124,18 @@ def plan_route(
     goal: Checkpoint,
     cost: Optional[CostFn] = None,
 ) -> Route:
-    """回傳成本最小的順序。waypoints 可以是空的（只去 Goal）。"""
+    """回傳成本最小的順序。waypoints 可以是空的（只去 Goal）。
+
+    超過 MAX_WAYPOINTS 個中途點時不會爆炸，改用最近鄰（規則上限是 12 個 CheckPoint，
+    這條路只是保險）。
+    """
     cost_fn = cost or leg_seconds
-    n = len(waypoints)
-    if n > MAX_WAYPOINTS:
-        raise ValueError("too many waypoints for exact search: %d" % n)
-
-    # best[mask][i] = 從起點出發、拜訪 mask 裡的點、最後停在 waypoints[i] 的最小成本
-    best: Dict[Tuple[int, int], float] = {}
-    parent: Dict[Tuple[int, int], Optional[int]] = {}
-    for i, wp in enumerate(waypoints):
-        best[(1 << i, i)] = cost_fn(start_pos, start_att, wp.position, wp.attitude)
-        parent[(1 << i, i)] = None
-
-    for mask in range(1, 1 << n):
-        for i in range(n):
-            if (mask, i) not in best or not mask & (1 << i):
-                continue
-            here = waypoints[i]
-            for j in range(n):
-                if mask & (1 << j):
-                    continue
-                there = waypoints[j]
-                candidate = best[(mask, i)] + cost_fn(
-                    here.position, here.attitude, there.position, there.attitude
-                )
-                key = (mask | (1 << j), j)
-                if candidate < best.get(key, float("inf")):
-                    best[key] = candidate
-                    parent[key] = i
-
-    full = (1 << n) - 1
-    if n == 0:
+    if not waypoints:
         order: List[int] = []
+    elif len(waypoints) > MAX_WAYPOINTS:
+        order = _nearest_neighbour(start_pos, start_att, waypoints, cost_fn)
     else:
-        last = min(
-            range(n),
-            key=lambda i: (
-                best[(full, i)]
-                + cost_fn(
-                    waypoints[i].position, waypoints[i].attitude, goal.position, goal.attitude
-                )
-            ),
-        )
-        order_idx: List[int] = []
-        mask = full
-        i: Optional[int] = last
-        for _ in range(n):  # parent 鏈最長 n 步
-            if i is None:
-                break
-            order_idx.append(i)
-            prev = parent[(mask, i)]
-            mask &= ~(1 << i)
-            i = prev
-        order = [waypoints[k].id for k in reversed(order_idx)]
+        order = _held_karp(start_pos, start_att, waypoints, goal, cost_fn)
 
     legs = []
     pos, att = start_pos, start_att

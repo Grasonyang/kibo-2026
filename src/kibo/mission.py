@@ -271,16 +271,34 @@ class _Run:
 
 
 def run_mission(robot: Robot, config: MissionConfig = DEFAULT_MISSION) -> MissionReport:
+    """整場任務。不管中間發生什麼（例外也算），只要任務開始了就一定會呼叫 mission_finish，
+    因為完成回報與剩餘時間倍率是乘在全部分數上的。"""
     run = _Run(robot, config)
     if not robot.mission_start():
         run.log("mission_start failed")
         return run.report(False, False, "mission_start failed")
     run.log("mission started")
+    goal_reached = False
+    aborted = ""
+    try:
+        goal_reached, aborted = _fly(run, robot, config)
+    except Exception as exc:  # 任何未預期的錯都不能吃掉完成回報
+        run.log("mission flow failed: %r" % (exc,))
+        aborted = "exception: %r" % (exc,)
+    if aborted == "stop requested":
+        return run.report(goal_reached, False, aborted)
+    finished = robot.mission_finish()
+    run.log("mission finished: %s" % finished)
+    return run.report(goal_reached, finished, aborted)
 
+
+def _fly(run: "_Run", robot: Robot, config: MissionConfig):
+    """從取得 CheckPoint 到抵達 Goal。回傳 (goal_reached, aborted)。"""
     cps = run.fetch_checkpoints()
     if cps is None:
-        robot.mission_finish()
-        return run.report(False, True, "no checkpoints")
+        return False, "no checkpoints"
+    for warning in cps.warnings:
+        run.log("checkpoints warning: " + warning)
     run.log("%d checkpoints, goal #%d" % (len(cps.checkpoints), cps.goal_id))
 
     pending: List[Checkpoint] = list(cps.waypoints)
@@ -288,7 +306,7 @@ def run_mission(robot: Robot, config: MissionConfig = DEFAULT_MISSION) -> Missio
     goal_reached = False
     for _ in range(len(cps.checkpoints) + 1):  # 每輪至少消化一個點，所以有上限
         if robot.stop_requested():
-            return run.report(goal_reached, False, "stop requested")
+            return goal_reached, "stop requested"
         here = run.current_pose() or run.last_pose or Pose(cps.goal.position, cps.goal.attitude)
         plan = plan_within_budget(
             here.position, here.orientation, pending, cps.goal, run.remaining(), config.budget
@@ -304,7 +322,4 @@ def run_mission(robot: Robot, config: MissionConfig = DEFAULT_MISSION) -> Missio
             goal_reached = record.notified
             break
         pending = [cp for cp in pending if cp.id != target.id]
-
-    finished = robot.mission_finish()
-    run.log("mission finished: %s" % finished)
-    return run.report(goal_reached, finished, "")
+    return goal_reached, ""
