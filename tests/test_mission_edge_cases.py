@@ -15,6 +15,7 @@ from kibo.mission import (
 )
 
 PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
+CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=0.3)
 SIDEWAYS_15CM = (0.0, 0.15, 0.0)  # 機體 +Y，與視線垂直：位置 Lv2、對中 Lv1
 LOST_35CM = (0.0, 0.0, 0.35)  # 超出最寬的位置餘裕
 
@@ -156,7 +157,7 @@ class DriftingCameraRobot(OffsetRobot):
 
 def test_camera_correction_recovers_level_3_without_a_second_absolute_move(three_point_message):
     robot = DriftingCameraRobot(three_point_message, PERFECT)
-    report = run_mission(robot, DEFAULT_MISSION)
+    report = run_mission(robot, CAMERA_ON)
     assert robot.passed_levels == [3, 3, 3]
     assert all(v.stable for v in report.visits)
     assert robot.move_calls == 3  # 絕對移動每點一次
@@ -169,7 +170,7 @@ class FarDriftCameraRobot(DriftingCameraRobot):
 
 def test_large_but_allowed_drift_is_still_corrected_by_camera(three_point_message):
     robot = FarDriftCameraRobot(three_point_message, PERFECT)
-    run_mission(robot, DEFAULT_MISSION)
+    run_mission(robot, CAMERA_ON)
     assert robot.passed_levels == [3, 3, 3]
     assert robot.relative_calls == 3
 
@@ -180,6 +181,12 @@ class HugeDriftCameraRobot(DriftingCameraRobot):
 
 def test_implausible_camera_correction_falls_back_to_absolute_move(three_point_message):
     robot = HugeDriftCameraRobot(three_point_message, PERFECT)
-    run_mission(robot, DEFAULT_MISSION)
+    run_mission(robot, CAMERA_ON)
     assert robot.relative_calls == 0
     assert robot.move_calls == 6
+
+
+def test_camera_fix_is_off_by_default_even_when_the_robot_has_a_camera(three_point_message):
+    robot = DriftingCameraRobot(three_point_message, PERFECT)
+    run_mission(robot, DEFAULT_MISSION)
+    assert robot.relative_calls == 0

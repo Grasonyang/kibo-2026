@@ -64,6 +64,7 @@ class RosRobot(Robot):
     def __init__(self):
         self._nav = None  # 最新的 Navigation 訊息
         self._nav_count = 0
+        self._init_time = rospy.get_time()
         self._nav_lock = threading.Lock()
         self._stop = threading.Event()
         self._active_lock = threading.Lock()
@@ -235,20 +236,25 @@ class RosRobot(Robot):
             )
             self._ctl_type = new_type
 
-    def survey(self, seconds=2.0):
-        """只收資料不飛：nav 頻率、stamp、status、camera_info、影像 encoding、sim time。
-        每場開始都印一次，所以第一場不用特別做什麼就有這些數字。"""
+    def survey(self):
+        """只印資料、不阻塞、不丟例外：nav 頻率（從節點啟動到現在）、stamp、status、
+        camera_info、影像 encoding、sim time。失敗只 log，絕不影響任務。"""
+        try:
+            self._survey()
+        except Exception as exc:  # 診斷碼不能讓任務變 0 分
+            rospy.logwarn("[survey] failed: %s", exc)
+
+    def _survey(self):
         with self._nav_lock:
-            before = self._nav_count
-        rospy.sleep(seconds)
-        with self._nav_lock:
-            nav, after = self._nav, self._nav_count
+            nav, count = self._nav, self._nav_count
+        window = max(rospy.get_time() - self._init_time, 1e-3)
         rospy.loginfo(
-            "[survey] use_sim_time=%s now=%.3f nav_msgs_in_%.1fs=%d",
+            "[survey] use_sim_time=%s now=%.3f nav_msgs=%d over %.1fs (%.1f Hz)",
             rospy.get_param("/use_sim_time", False),
             rospy.get_time(),
-            seconds,
-            after - before,
+            count,
+            window,
+            count / window,
         )
         if nav is not None:
             p = nav.pose.pose.position
@@ -389,13 +395,15 @@ class UserNode(object):
             self._started = True
         rospy.loginfo("start %s", msg)
         try:
-            self._robot.survey()
             if rospy.get_param("~survey_only", False):
-                # 第 1 場「只收資料」：開始、印 survey、立刻完成回報，不飛。
+                # 第 1 場「只收資料」：開始、等 5 秒累積訊息、印 survey、完成回報，不飛。
                 rospy.logwarn("survey_only: not flying")
                 self._robot.mission_start()
+                rospy.sleep(5.0)
+                self._robot.survey()
                 self._robot.mission_finish()
                 return
+            self._robot.survey()  # 不阻塞、不丟例外；只是在任務前印一次數字
             # run_mission 自己保證 mission_finish（例外也會），這裡只做接線。
             report = run_mission(self._robot, self._config())
             rospy.loginfo("mission report: %s", report)

@@ -50,7 +50,8 @@ def main(argv: List[str]) -> int:
     )
     scores = []
     for i in range(args.runs):
-        robot, report = run_once(args.seed + i, args.checkpoints, robot_cfg, DEFAULT_MISSION)
+        mission_cfg = DEFAULT_MISSION._replace(camera_fix_max_m=0.3 if args.camera else 0.0)
+        robot, report = run_once(args.seed + i, args.checkpoints, robot_cfg, mission_cfg)
         score = robot.score()
         scores.append(score)
         print(

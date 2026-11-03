@@ -127,7 +127,7 @@ uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera  
 |---|---|---|
 | **速度猜錯時，線上校正是最大的單一改善** | 是 | 真速只有一半（0.05）時，20 場、世界 B/T0、沒相機：8 點不校正 27 分、Goal 10/20 → 校正 75 分、20/20；12 點 57 分、14/20 → 89 分、19/20。`kibo.tune --speed 0.05` 的「不校正速度」在四個世界最大後悔 40 分，其餘 ≤ 7。速度猜對（0.1、0.2）時與不校正完全相同 |
 | **刪點保 Goal 是最不會後悔的選擇** | 是 | `kibo.tune` 的「不刪點（只做對照）」變體：四世界裡只在「Goal 需全點且逾時保留分」小輸幾分，其餘大輸（12 點、真速 0.1 時逾時世界整場 0） |
-| 相機修正有幫助 | **fake-sensitive** | 只在相對移動幾乎無誤差時成立；相對移動加 5 cm 雜訊，增益就消失 |
+| 相機修正有幫助 | **fake-sensitive** | 只在相對移動幾乎無誤差時成立；相對移動加 5 cm 雜訊，增益就消失。所以**預設關**（`camera_fix_max_m=0`），上機驗過座標再開 |
 | 只求 Lv2 比追 Lv3 好 | **fake-sensitive** | 取決於真實的 Lv 分數比與到點誤差，兩者都沒公布 |
 | 保險、穩定估值、趕時間門檻怎麼調 | **分不出來** | 差異 5–10 分，與資格賽 10 次平均的標準誤（單場 sd 12–17，標準誤約 4–5）同量級；拿到真資料前不調 |
 
@@ -139,4 +139,5 @@ uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera  
 - ROS 接線層沒跑過（沒有模擬器）。第一次跑要核對的事列在 [ros/README.md](../../ros/README.md)。
 - 相機修正已接進流程但 ROS 端沒測過：主流程靠導航資料，只有「到了但不穩」時才用相機看 marker 修正幾公分（`src/kibo/vision.py`，合成影像測過）。假機器人可用 `--camera` 開假相機。
 - 更多點子與取捨：[ideas.md](ideas.md)。規格：[spec.md](spec.md)。進度：[tickets.md](tickets.md)。第一輪的回顧：[retro.md](retro.md)。
+- 想問主辦的十個問題在 [docs/kibo/questions-for-poc.md](../kibo/questions-for-poc.md)，答案能省掉上機的兩場探針。
 - 第一版結案後開了一場 council（四位委員兩輪匿名互評，主席查證）：[notes/council/v1-review/synthesis.md](../../notes/council/v1-review/synthesis.md)，裁決 R1–R5 已實作（T14–T18，R6 是「停止」清單），待使用者確認。

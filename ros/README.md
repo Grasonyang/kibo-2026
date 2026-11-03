@@ -20,9 +20,13 @@
 每場 5 分鐘加啟動，第一小時大概只有 5 到 7 場，所以順序與「驗到什麼就改什麼」要先寫好。
 Web 模擬器只回結果 JSON 與我們的 log（手冊 4.3.2），**log 寫了什麼就是全部的資料**。
 
+### 第 −1 場（不用模擬器）：先問 POC
+
+`docs/kibo/questions-for-poc.md` 的十個問題，答案能直接省掉第 3、4 場探針。提問截止 2027-01-20 12:00。
+
 ### 第 0 場：未改的官方範本
 
-目的：拿到 `cheat_sheet.json` 與結果 JSON 的全貌，不花我們的程式。
+目的：拿到 `cheat_sheet.json` 與結果 JSON 的全貌，不花我們的程式。範本只走第一個點就完成回報（手冊 6.4.3），所以結果 JSON 的 `goal.success`／`goal.reason` 很可能**免費回答**「Goal 分數是否要求全部通過」。
 核對：`goalpoint_id` 是否在 `checkpoints[]` 裡、`checkpoint_count` 含不含 Goal、id 是否等於 marker 編號、
 有沒有 N/A 的點（手冊 4.3.1）、距離與傾角分布對 `scenarios.py` 的猜測（0.4–0.7 m、≤ 20°）、
 範本的 shebang 與 `python` 版本（照抄到 `user_node.py`）、Simulator Level 有哪些、每日跑次配額。
@@ -36,6 +40,7 @@ Web 模擬器只回結果 JSON 與我們的 log（手冊 4.3.2），**log 寫了
 
 ### 第 2 場：正常跑一場（校準）
 
+設定：速度校正開（預設；速度猜對時零影響，起停時間被算進去反而讓預算誠實）、**相機修正關**（預設 `camera_fix_max_m=0`；ROS 端座標未驗證，開著會把每個不穩的點多一次移動，混淆 log）、探針全關。
 逐項核對 log 與結果 JSON：
 - 每段 `leg: Xm in Ys (model Zs)`：實際比模型慢超過 25% 會自動校正；慢超過 2 倍就要改 `Speeds` 預設值。
 - `at #n: ... -> Lv? nav_age=`：我們的 Lv 對 JSON `checkpoint_detail.level`。伺服器恆較低 → 試 `camera_offset_m=(0,0,0)`；仍較低代表 nav 有偏差，相機修正升為主線。
@@ -43,9 +48,9 @@ Web 模擬器只回結果 JSON 與我們的 log（手冊 4.3.2），**log 寫了
 - `goal.reason`、`Time Bonus`、各 Lv 的分數：校正 `scoring.py` 的常數。
 - 有沒有被「長時間不動」提前結束（規則書 4.2.5）：有的話 `settle_timeout_sec` 要縮。
 
-### 第 3、4 場：只在刪點會觸發時才做的探針
+### 第 3、4 場：只在刪點會觸發、而且第 0 場與 POC 都沒給答案時才做的探針
 
-第 2 場若從沒出現 `dropping`，這兩場可以省。探針旗標預設關，用 ROS 私有參數開（`_probe_skip_one_waypoint:=true`、`_probe_deliberate_late_after:=2`、`_probe_notify_even_if_level0:=true`），log 會印 `PROBE FLAGS ON`；**決賽程式不得開啟**（規則書 4.2.4 只能跑一次），提交前確認 launch 檔沒有帶這些參數。
+第 2 場若從沒出現 `dropping`，或第 0 場的 `goal.reason` 已經說明了 Goal 規則，這兩場可以省。探針旗標預設關，用 ROS 私有參數開（`_probe_skip_one_waypoint:=true`、`_probe_deliberate_late_after:=2`、`_probe_notify_even_if_level0:=true`），log 會印 `PROBE FLAGS ON`；**決賽程式不得開啟**（規則書 4.2.4 只能跑一次），提交前確認 launch 檔沒有帶這些參數。
 - `skip_one_waypoint=True`：看 `goal.success` 與 Goal Score → 定 A（需全點）或 B（只需 Goal 點）。
 - `deliberate_late_after=2`：看已過的點分數是否保留、Time Bonus 多少 → 定 T0 或 T1。
 - `notify_even_if_level0=True`：自判 0 分也回報，拿伺服器判定校準 `judge`。

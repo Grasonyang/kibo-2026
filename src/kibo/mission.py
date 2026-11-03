@@ -97,7 +97,9 @@ class MissionConfig(NamedTuple):
     checkpoints_retry_sec: float = 1.0
     pose_attempts: int = 5
     camera_offset_m: Vec3 = CAMERA_OFFSET  # 對中用相機位置；伺服器若用機體中心就設成 (0, 0, 0)
-    camera_fix_max_m: float = 0.3  # 相機算出的修正量超過這個就不信它，改用絕對移動
+    camera_fix_max_m: float = (
+        0.0  # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
+    )
     calibrate_speed: bool = True  # 用實測的移動速度修正時間預算（只往慢的方向）
     min_speed_ratio: float = 0.5  # 校正後的速度不低於預設的這個比例
     calibrate_below_ratio: float = 0.8  # 實測比預設慢超過這個比例才校正；實測含起停，略慢是正常
@@ -328,6 +330,8 @@ class _Run:
 
     def camera_fix(self, cp: Checkpoint) -> bool:
         """用相機看到的 marker 位置修正幾公分；沒有相機、沒看到或修正量太大就回 False。"""
+        if self.cfg.camera_fix_max_m <= 0.0:
+            return False
         observed = self.robot.marker_in_body(cp.id)
         if observed is None:
             return False

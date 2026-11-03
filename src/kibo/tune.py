@@ -42,6 +42,9 @@ def robot_variants(base: FakeRobotConfig) -> List[Tuple[str, FakeRobotConfig]]:
     return [("沒相機", base), ("有相機", base._replace(camera=True))]
 
 
+CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=0.3)
+
+
 class Row(NamedTuple):
     label: str
     means: Dict[str, float]  # 世界 -> 平均
@@ -113,7 +116,16 @@ def main(argv: List[str]) -> int:
     )
     for robot_name, cfg in robot_variants(robot_cfg):
         print("--- %s ---" % robot_name)
-        rows = [evaluate(v, args.runs, args.checkpoints, args.seed, cfg) for v in variants()]
+        rows = [
+            evaluate(
+                v._replace(config=v.config._replace(camera_fix_max_m=0.3 if cfg.camera else 0.0)),
+                args.runs,
+                args.checkpoints,
+                args.seed,
+                cfg,
+            )
+            for v in variants()
+        ]
         regret = max_regret(rows)
         print(
             "%-22s %7s %7s %7s %7s %7s %6s %5s %6s"
