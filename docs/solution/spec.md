@@ -48,7 +48,7 @@
 - **`Robot` 介面**（抽象類別）：八個必要方法 `now`、`pose`（沒資料回 None）、`move_to(pose, timeout) -> 字串常數 MOVE_SUCCESS/TIMEOUT/ABORTED/INVALID`、`sleep`、`mission_start`、`get_checkpoints_message`、`notify_checkpoint`、`mission_finish`，加兩個選用 `stop_requested`、`log`。ROS 版與假機器人版各實作一次。ROS 版的服務呼叫放在 daemon thread 裡用 Event 等，因為 `ServiceProxy` 本身沒有逾時。
 - **假機器人**：等速直線加等角速度轉動的簡化模型，可注入位置雜訊與偶發失敗，並依 bands 判 Lv 算分，讓策略比較有數字可看。它不是物理模擬，分數只能做相對比較。
 - **ROS 接線層**：照官方範本結構（`/ib2_user/start`、`/ib2_user/stop`、`/ib2_user/ready` 保留），`Robot` 的每個方法對應一個 action 或 service，全部有逾時與取消。
-- **影像**：第一版不做自己的 ArUco 位姿估計，因為伺服器的判定用的是 nav 位置與姿態，不是我們的影像結果。影像留作第二版的「到點後微調」。
+- **影像（第二版，已接線、ROS 端未測）**：主流程仍靠導航資料。只有在 settle 不穩定時，若 `Robot.marker_in_body` 回得出該 marker 在機體座標系的位置，就把它和「站在目標姿態時應看到的位置」相減得到修正量，小於 0.3 m 才用 `move_relative`（`MOVE_TO_RELATIVE_TARGET`，姿態不變）修正；否則退回再做一次絕對移動。沒有相機的 `Robot` 不實作這兩個方法即可（預設回 None／`MOVE_INVALID`）。ArUco 細節：字典假設 `DICT_4X4_50`、邊長 0.02 m、位姿用 `solvePnP`，同時支援 OpenCV 3.x 與 4.7+。
 - **Log**：每個階段一行，開頭固定是剩餘秒數，後面是階段與數字（路線與估時、移動結果、三項指標與 Lv、是否穩定、回報結果）。
 
 ## 測試決策
@@ -61,13 +61,13 @@
 | `plan_route(start, checkpoints, goal_id)` | 順序錯、沒以 Goal 收尾、漏點 | 成本模型不符真實速度 |
 | 幾何：`look_at`、`angle_between`、`roll_error` | 姿態算錯、對中與滾轉指標錯 | 伺服器判定與我們公式的細微差異 |
 | `judge(pose, checkpoint)` | Lv 算錯、邊界 | 伺服器實際的判定頻率 |
-| `run_mission(robot, clock)` 搭配假機器人 | 流程卡死、重試無上限、時間預算失效、Goal 被刪 | 真實動力學、ROS 行為 |
+| `run_mission(robot, clock)` 搭配假機器人 | 流程卡死、重試無上限、時間預算失效、Goal 被刪、相機修正是否被採用或拒絕 | 真實動力學、ROS 行為 |
+| `observe_markers(gray, K, D)` 搭配合成影像 | 偵測與位姿的座標慣例、鏡像 | 真實鏡頭的畸變與曝光 |
 
 測試用已知答案的數字（例如手算的距離、規則書的 marker 位置），不用程式自己的算法回推。ROS 接線層沒有本機測試，第一次在模擬器跑就是它的測試。
 
 ## 範圍外
 
-- 自製影像辨識與以 marker 校正位置（第二版）。
 - `/ctl/wrench` 直接施力控制。
 - 決賽（ISS 實機）的差異。
 - 模擬器相關腳本的實測（等 tar）。

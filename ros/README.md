@@ -4,7 +4,7 @@
 
 | 檔案 | 用途 |
 |---|---|
-| `user_node.py` | ROS 節點：`RosRobot` 實作 `kibo.mission.Robot`，`UserNode` 保留官方要求的 start／stop／ready 三個介面 |
+| `user_node.py` | ROS 節點：`RosRobot` 實作 `kibo.mission.Robot`（含選用的相機修正 `marker_in_body`、`move_relative`），`UserNode` 保留官方要求的 start／stop／ready 三個介面 |
 
 ## 接進官方範本（拿到 `krpc7th-simulator.tar.gz` 後）
 
@@ -24,3 +24,4 @@
 - 計時起點：我們的 t0 是 `/ib2_user/start` 到來的時刻。比對結果 JSON 的 `mission.start`、`duration_sec` 與 log 的 elapsed；若伺服器起算得更早，調大 `MissionConfig` 的保險或把 t0 往前推。
 - 刪點後 Goal 是否仍給分：故意只去一半的點，看結果 JSON 的 `goal.success` 與 Goal Score。
 - 服務呼叫用 daemon thread 加 `Event.wait` 做逾時（`_call`）；確認逾時後任務能繼續、節點能正常結束。
+- 相機：`/camera_main/image_raw` 的 encoding（`_to_gray` 只支援 mono8／bgr8／rgb8／bgra8／rgba8）、`camera_info.K` 是否與影像解析度一致、`DICT_4X4_50` 是否偵測得到 marker、`MOVE_TO_RELATIVE_TARGET` 的 `body` frame 與我們的機體座標系（X 前 Y 左 Z 上）是否一致。

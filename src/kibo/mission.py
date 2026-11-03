@@ -18,8 +18,9 @@ from typing import Dict, List, NamedTuple, Optional
 from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
-from kibo.geometry import Vec3
+from kibo.geometry import Vec3, norm
 from kibo.judge import CAMERA_OFFSET, Judgement, Pose, judge, target_attitude
+from kibo.vision import body_correction, expected_marker_in_body
 
 MOVE_SUCCESS = "success"
 MOVE_TIMEOUT = "timeout"
@@ -65,6 +66,14 @@ class Robot(ABC):
     def stop_requested(self) -> bool:
         return False
 
+    def marker_in_body(self, marker_id: int) -> Optional[Vec3]:
+        """相機看到的 marker 中心在機體座標系的位置；沒有相機或沒看到就回 None（選用）。"""
+        return None
+
+    def move_relative(self, delta: Vec3, timeout_sec: float) -> str:
+        """以機體座標系平移 delta、姿態不變；不支援就回 MOVE_INVALID（選用）。"""
+        return MOVE_INVALID
+
     def log(self, message: str) -> None:
         """預設印到標準輸出；ROS 版改用 rospy.loginfo。"""
         print(message)
@@ -85,6 +94,7 @@ class MissionConfig(NamedTuple):
     checkpoints_retry_sec: float = 1.0
     pose_attempts: int = 5
     camera_offset_m: Vec3 = CAMERA_OFFSET  # 對中用相機位置；伺服器若用機體中心就設成 (0, 0, 0)
+    camera_fix_max_m: float = 0.3  # 相機算出的修正量超過這個就不信它，改用絕對移動
 
 
 DEFAULT_MISSION = MissionConfig()
@@ -222,13 +232,29 @@ class _Run:
             " (stable)" if settled.stable else " (unstable)",
         )
 
+    def camera_fix(self, cp: Checkpoint) -> bool:
+        """用相機看到的 marker 位置修正幾公分；沒有相機、沒看到或修正量太大就回 False。"""
+        observed = self.robot.marker_in_body(cp.id)
+        if observed is None:
+            return False
+        expected = expected_marker_in_body(cp.position, target_attitude(cp), cp.marker_position)
+        delta = body_correction(observed, expected)
+        if norm(delta) > self.cfg.camera_fix_max_m:
+            self.log("camera correction %.2fm too large, ignoring" % norm(delta))
+            return False
+        result = self.robot.move_relative(delta, self.move_timeout())
+        self.log(
+            "camera correction (%.3f, %.3f, %.3f): %s" % (delta[0], delta[1], delta[2], result)
+        )
+        return result == MOVE_SUCCESS
+
     def visit(self, cp: Checkpoint) -> Visit:
         moved = self.move(cp, self.cfg.max_move_attempts)
         settled = self.settle(cp)
         self.log(self.describe(cp, settled))
         if not settled.stable and moved and self.remaining() > self.cfg.hurry_sec:
-            # 再靠近一次通常就夠了；只做一次，不無限修正。
-            if self.move(cp, 1):
+            # 再修正一次通常就夠了；只做一次，不無限修正。有相機就用相機，沒有就再絕對移動一次。
+            if self.camera_fix(cp) or self.move(cp, 1):
                 settled = self.settle(cp)
                 self.log("refined: " + self.describe(cp, settled))
         # 穩定達標就回報；沒穩定但最後一次判定至少 Lv1 也回報（伺服器才是裁判，

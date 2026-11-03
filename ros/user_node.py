@@ -30,6 +30,7 @@ from krpc_ib2_msgs.msg import CheckpointPassedAction, CheckpointPassedGoal
 from krpc_ib2_msgs.srv import CheckPoints, MissionFinished, MissionStart
 from platform_msgs.msg import UserLogic
 from platform_msgs.srv import StopProcessingUserNode, StopProcessingUserNodeResponse
+from sensor_msgs.msg import CameraInfo, Image
 
 from kibo.judge import Pose
 from kibo.mission import (
@@ -41,12 +42,14 @@ from kibo.mission import (
     Robot,
     run_mission,
 )
+from kibo.vision import observe_markers
 
 SERVICE_TIMEOUT_SEC = 10.0  # 等服務出現，以及等它回應，各自的上限
 ACTION_SERVER_TIMEOUT_SEC = 10.0
 NOTIFY_TIMEOUT_SEC = 15.0
 CANCEL_WAIT_SEC = 5.0
 NAV_FRESH_SEC = 1.0  # 導航資料比這舊就當作沒有
+IMAGE_FRESH_SEC = 1.0
 POLL_SEC = 0.2
 
 ACTION_DONE = "done"
@@ -70,6 +73,12 @@ class RosRobot(Robot):
         self._mission_finished = rospy.ServiceProxy("/event/mission_finished", MissionFinished)
         self._checkpoints = rospy.ServiceProxy("/mission/get_checkpoints", CheckPoints)
         self._nav_sub = rospy.Subscriber("/sensor_fusion/navigation", Navigation, self._on_nav)
+        # 相機（選用）：只在 settle 不穩定時用來修正幾公分
+        self._image = None
+        self._camera_info = None
+        self._image_lock = threading.Lock()
+        self._image_sub = rospy.Subscriber("/camera_main/image_raw", Image, self._on_image)
+        self._info_sub = rospy.Subscriber("/camera_main/camera_info", CameraInfo, self._on_info)
 
     # ---- Robot 介面 ----
     def now(self):
@@ -148,6 +157,43 @@ class RosRobot(Robot):
         )
         return bool(result.success)
 
+    def marker_in_body(self, marker_id):
+        """最新影像裡若看得到該 marker，回它在機體座標系的位置；否則 None。"""
+        with self._image_lock:
+            image, info = self._image, self._camera_info
+        if image is None or info is None:
+            return None
+        if (rospy.Time.now() - image.header.stamp).to_sec() > IMAGE_FRESH_SEC:
+            return None
+        gray = self._to_gray(image)
+        if gray is None:
+            return None
+        try:
+            seen = observe_markers(gray, list(info.K), list(info.D) if info.D else None)
+        except Exception as exc:  # 影像處理失敗不能中斷任務
+            rospy.logwarn("marker detection failed: %s", exc)
+            return None
+        observation = seen.get(marker_id)
+        return observation.position_body if observation else None
+
+    def move_relative(self, delta, timeout_sec):
+        if not self._command.wait_for_server(rospy.Duration(ACTION_SERVER_TIMEOUT_SEC)):
+            return MOVE_ABORTED
+        target = PoseStamped()
+        target.header.stamp = rospy.Time.now()
+        target.header.frame_id = "body"
+        target.pose.position.x, target.pose.position.y, target.pose.position.z = delta
+        target.pose.orientation.w = 1.0
+        goal = CtlCommandGoal(
+            target=target, type=CtlStatusType(type=CtlStatusType.MOVE_TO_RELATIVE_TARGET)
+        )
+        status, result = self._run_action(self._command, goal, timeout_sec)
+        if status == ACTION_TIMEOUT:
+            return MOVE_TIMEOUT
+        if status == ACTION_STOPPED or result is None:
+            return MOVE_ABORTED
+        return MOVE_SUCCESS if result.type == CtlCommandResult.TERMINATE_SUCCESS else MOVE_ABORTED
+
     # ---- 給節點用 ----
     def request_stop(self):
         """停止要求：取消所有執行中的 action，等它們結束。"""
@@ -165,6 +211,37 @@ class RosRobot(Robot):
     def _on_nav(self, msg):
         with self._nav_lock:
             self._nav = msg
+
+    def _on_image(self, msg):
+        with self._image_lock:
+            self._image = msg
+
+    def _on_info(self, msg):
+        with self._image_lock:
+            self._camera_info = msg
+
+    @staticmethod
+    def _to_gray(msg):
+        """sensor_msgs/Image 轉灰階 numpy 陣列。不用 cv_bridge，少一個依賴。"""
+        import cv2
+        import numpy as np
+
+        channels = {"mono8": 1, "bgr8": 3, "rgb8": 3, "bgra8": 4, "rgba8": 4}.get(msg.encoding)
+        if channels is None:
+            rospy.logwarn_throttle(10.0, "unsupported image encoding %s", msg.encoding)
+            return None
+        array = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.step // 1)[
+            :, : msg.width * channels
+        ]
+        array = array.reshape(msg.height, msg.width, channels) if channels > 1 else array
+        if channels == 1:
+            return array
+        code = {
+            "bgr8": cv2.COLOR_BGR2GRAY,
+            "rgb8": cv2.COLOR_RGB2GRAY,
+            "bgra8": cv2.COLOR_BGRA2GRAY,
+        }
+        return cv2.cvtColor(array, code.get(msg.encoding, cv2.COLOR_RGBA2GRAY))
 
     @staticmethod
     def _pose_stamped(pose):

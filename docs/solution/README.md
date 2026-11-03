@@ -3,7 +3,7 @@
 這份文件假設你沒有機器人、ROS 或比賽背景。看完你會知道：比賽在玩什麼、我們打算怎麼贏、
 程式碼怎麼分、怎麼在自己電腦上跑一場、還有哪些事沒做。
 
-圖都在這個 FigJam 板：<https://www.figma.com/board/dcZJJmt8eCZj1jt3yjR3wz>（四張：比賽流程、程式架構、任務狀態機、評分邏輯）。
+圖都在這個 FigJam 板：<https://www.figma.com/board/dcZJJmt8eCZj1jt3yjR3wz>（比賽流程、程式架構、任務狀態機、評分邏輯）。板上有兩張狀態機圖，以標題帶「審查後更新」的那張為準。
 
 ## 1. 比賽在玩什麼
 
@@ -66,11 +66,12 @@
 
 ```bash
 uv sync --locked                                  # 第一次：裝工具
-uv run pytest                                     # 60 個測試，約 0.3 秒
+uv run pytest                                     # 63 個測試，約 0.3 秒
 uv run python -m kibo.simulate --runs 10 --checkpoints 8        # 本機「資格賽」
 uv run python -m kibo.simulate --runs 1 --checkpoints 6 -v      # 看一場的逐步 log
 uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08   # 刁難它
-uv run python -m kibo.tune --runs 20 --checkpoints 10                   # 比較幾組參數的平均與最低分
+uv run python -m kibo.tune --runs 20 --checkpoints 10                   # 比較幾組參數的平均與最低分，有無相機各一表
+uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera   # 開假相機
 ```
 
 一場的 log 長這樣（`-v`），每行開頭是剩餘秒數：
@@ -118,5 +119,5 @@ uv run python -m kibo.tune --runs 20 --checkpoints 10                   # 比較
 ## 6. 還沒做的
 
 - ROS 接線層沒跑過（沒有模擬器）。第一次跑要核對的事列在 [ros/README.md](../../ros/README.md)。
-- 相機影像還沒接進任務流程：第一版只靠導航資料。看 marker 算相對位置的模組已做好並用合成影像測過（`src/kibo/vision.py`），接進 `Robot` 介面是第二版主線，見 [ideas.md](ideas.md)。
+- 相機修正已接進流程但 ROS 端沒測過：主流程靠導航資料，只有「到了但不穩」時才用相機看 marker 修正幾公分（`src/kibo/vision.py`，合成影像測過）。假機器人可用 `--camera` 開假相機。
 - 更多點子與取捨：[ideas.md](ideas.md)。規格：[spec.md](spec.md)。進度：[tickets.md](tickets.md)。

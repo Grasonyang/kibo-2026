@@ -16,3 +16,4 @@
 | T10 | reviewer 審查（Standards、Spec 各一）與修正 | 審查報告無 blocker | done：無 blocker；3+4 個 major 全修，minor/nit 修完；補 13 個測試 |
 | T11 | 相機模組 `vision.py`（偵測、solvePnP、座標換算、修正量），合成影像測試 | 位置誤差 < 1 cm；3.x 與 4.7+ API 都支援 | done（接線未做） |
 | T12 | 參數掃描 `kibo.tune` 與視差開關 `camera_offset_m` | 印出平均與最低分；開關有測試 | done |
+| T13 | 相機修正接進流程：`Robot.marker_in_body`、`move_relative`，假相機，ROS 端影像訂閱 | 假相機下 15 cm 偏移一次修回 Lv3；超過 0.3 m 退回絕對移動 | done（ROS 端未測） |

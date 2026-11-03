@@ -31,6 +31,9 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--noise", type=float, default=0.03, help="到點位置誤差標準差（公尺）")
     parser.add_argument("--fail", type=float, default=0.0, help="每次移動失敗的機率")
     parser.add_argument("--speed", type=float, default=0.12, help="假機器人的真實線速度（m/s）")
+    parser.add_argument(
+        "--camera", action="store_true", help="假機器人開相機，不穩時用 marker 修正"
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="印出每場的 log")
     args = parser.parse_args(argv)
     if args.runs < 1:
@@ -43,6 +46,7 @@ def main(argv: List[str]) -> int:
         position_noise_m=args.noise,
         move_fail_prob=args.fail,
         speeds=base.speeds._replace(linear_mps=args.speed),
+        camera=args.camera,
     )
     scores = []
     for i in range(args.runs):

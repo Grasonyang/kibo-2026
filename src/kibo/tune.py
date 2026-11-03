@@ -8,7 +8,7 @@
 
 import argparse
 import sys
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Tuple
 
 from kibo.fake_robot import FakeRobot, FakeRobotConfig
 from kibo.mission import DEFAULT_MISSION, MissionConfig, run_mission
@@ -32,6 +32,10 @@ def variants() -> List[Variant]:
         Variant("只求 Lv2", base._replace(target_level=2)),
         Variant("趕時間門檻 90s", base._replace(hurry_sec=90.0)),
     ]
+
+
+def robot_variants(base: FakeRobotConfig) -> List[Tuple[str, FakeRobotConfig]]:
+    return [("沒相機", base), ("有相機", base._replace(camera=True))]
 
 
 def evaluate(variant: Variant, runs: int, count: int, seed: int, robot_cfg: FakeRobotConfig):
@@ -69,10 +73,12 @@ def main(argv: List[str]) -> int:
         "%d 場、%d 點、誤差 %.2fm、失敗率 %.0f%%、速度 %.2fm/s"
         % (args.runs, args.checkpoints, args.noise, args.fail * 100, args.speed)
     )
-    print("%-26s %8s %8s %6s" % ("變體", "平均", "最低", "到 Goal"))
-    for variant in variants():
-        mean, worst, goals = evaluate(variant, args.runs, args.checkpoints, args.seed, robot_cfg)
-        print("%-26s %8.1f %8.1f %3d/%d" % (variant.name, mean, worst, goals, args.runs))
+    for robot_name, cfg in robot_variants(robot_cfg):
+        print("--- %s ---" % robot_name)
+        print("%-26s %8s %8s %6s" % ("變體", "平均", "最低", "到 Goal"))
+        for variant in variants():
+            mean, worst, goals = evaluate(variant, args.runs, args.checkpoints, args.seed, cfg)
+            print("%-26s %8.1f %8.1f %3d/%d" % (variant.name, mean, worst, goals, args.runs))
     return 0
 
 

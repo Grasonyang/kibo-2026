@@ -10,11 +10,12 @@ import random
 from typing import List, NamedTuple, Optional
 
 from kibo.checkpoints import CheckpointSet, parse_checkpoints
-from kibo.geometry import Quat, Vec3, add, normalize, quat_mul, quat_normalize
+from kibo.geometry import Quat, Vec3, add, norm, normalize, quat_mul, quat_normalize, rotate
 from kibo.judge import Pose, judge
 from kibo.mission import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT, Robot
 from kibo.planner import Speeds, leg_seconds
 from kibo.scoring import DEFAULT_SCORING, Scoring
+from kibo.vision import expected_marker_in_body
 
 
 class FakeRobotConfig(NamedTuple):
@@ -27,6 +28,8 @@ class FakeRobotConfig(NamedTuple):
     checkpoints_fail_times: int = 0  # 前幾次 get_checkpoints 故意失敗
     scoring: Scoring = DEFAULT_SCORING
     start_pose: Pose = Pose((0.2, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    camera: bool = False  # 開了才會回 marker_in_body
+    vision_noise_m: float = 0.005  # 相機算出的 marker 位置誤差（標準差）
 
 
 DEFAULT_FAKE = FakeRobotConfig()
@@ -57,6 +60,7 @@ class FakeRobot(Robot):
         self.passed_levels: List[int] = []
         self.passed_ids: List[int] = []
         self.move_calls = 0
+        self.relative_calls = 0
         self.checkpoints_calls = 0
         self.logs: List[str] = []
         self.stop = False
@@ -98,6 +102,21 @@ class FakeRobot(Robot):
         )
         wobble = _random_rotation(self.rng, self.cfg.attitude_noise_deg)
         self.true_pose = Pose(add(target.position, noise), quat_mul(target.orientation, wobble))
+        return MOVE_SUCCESS
+
+    def marker_in_body(self, marker_id: int) -> Optional[Vec3]:
+        """假相機：由真實姿態反推 marker 在機體座標系的位置，加一點雜訊。"""
+        if not self.cfg.camera:
+            return None
+        marker = self.checkpoints.by_id(marker_id).marker_position
+        truth = expected_marker_in_body(self.true_pose.position, self.true_pose.orientation, marker)
+        return add(truth, tuple(self.rng.gauss(0, self.cfg.vision_noise_m) for _ in range(3)))  # type: ignore[arg-type]
+
+    def move_relative(self, delta: Vec3, timeout_sec: float) -> str:
+        self.relative_calls += 1
+        self.t += self.cfg.move_overhead_sec + norm(delta) / self.cfg.speeds.linear_mps
+        shift = rotate(self.true_pose.orientation, delta)
+        self.true_pose = Pose(add(self.true_pose.position, shift), self.true_pose.orientation)
         return MOVE_SUCCESS
 
     def mission_start(self) -> bool:

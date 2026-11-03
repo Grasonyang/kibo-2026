@@ -145,3 +145,41 @@ def test_stop_in_the_middle_aborts_without_finish(three_point_message):
     assert report.aborted == "stop requested"
     assert len(robot.passed_ids) == 1
     assert robot.finished_at is None
+
+
+class DriftingCameraRobot(OffsetRobot):
+    """每次絕對移動都偏 15 cm，但有相機；相對移動是準的。"""
+
+    def __init__(self, message, config, seed=0):
+        super().__init__(message, config._replace(camera=True), seed)
+
+
+def test_camera_correction_recovers_level_3_without_a_second_absolute_move(three_point_message):
+    robot = DriftingCameraRobot(three_point_message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert robot.passed_levels == [3, 3, 3]
+    assert all(v.stable for v in report.visits)
+    assert robot.move_calls == 3  # 絕對移動每點一次
+    assert robot.relative_calls == 3  # 修正每點一次
+
+
+class FarDriftCameraRobot(DriftingCameraRobot):
+    offset = (0.0, 0.0, 0.29)  # 位置超出餘裕，但相機修正量在上限內
+
+
+def test_large_but_allowed_drift_is_still_corrected_by_camera(three_point_message):
+    robot = FarDriftCameraRobot(three_point_message, PERFECT)
+    run_mission(robot, DEFAULT_MISSION)
+    assert robot.passed_levels == [3, 3, 3]
+    assert robot.relative_calls == 3
+
+
+class HugeDriftCameraRobot(DriftingCameraRobot):
+    offset = (0.0, 0.0, 0.5)  # 超過 camera_fix_max_m，應該不信相機、改用絕對移動
+
+
+def test_implausible_camera_correction_falls_back_to_absolute_move(three_point_message):
+    robot = HugeDriftCameraRobot(three_point_message, PERFECT)
+    run_mission(robot, DEFAULT_MISSION)
+    assert robot.relative_calls == 0
+    assert robot.move_calls == 6
