@@ -58,9 +58,9 @@ def test_calibration_is_capped_at_twice_the_model():
     assert all("x2.00 vs model" in line for line in lines)
 
 
-def test_a_few_seconds_of_overhead_per_move_stay_inside_the_deadband(three_point_message):
-    # 每次移動多花 3 秒（模型沒算到的）：一段腿二十幾秒，慢 15% 左右，在 25% 的死區內，不該校正。
-    robot = FakeRobot(three_point_message, NOISY._replace(move_overhead_sec=3.0))
+def test_a_second_of_overhead_per_move_stays_inside_the_deadband(three_point_message):
+    # 每次移動多花 1 秒（模型沒算到的）：一段腿二十幾秒，慢 5% 左右，在 11% 的死區內，不該校正。
+    robot = FakeRobot(three_point_message, NOISY._replace(move_overhead_sec=1.0))
     run_mission(robot, DEFAULT_MISSION)
     assert not any("speed calibrated" in line for line in robot.logs)
 
