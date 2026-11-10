@@ -19,8 +19,9 @@ from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose, Vec3, distance, norm, quat_angle
-from kibo.judge import Judgement, judge, target_attitude, top_band_usage
+from kibo.judge import Judgement, target_attitude
 from kibo.motion import Speeds, leg_seconds
+from kibo.settle import SettleRule, Steadiness
 from kibo.vision import body_correction, expected_marker_in_body
 
 ABORT_STOP = "stop requested"
@@ -287,20 +288,34 @@ class _Run:
             )
             self.speeds = calibrated
 
-    def settle(self, cp: Checkpoint) -> Settled:
-        """等到連續幾次自我判定都達標（stable=True），或逾時（回傳最後一次判定）。
+    def settle_rule(self) -> SettleRule:
+        """設定裡與穩定有關的幾欄，換成 kibo.settle 的規則。1 秒 = (筆數 - 1) x 取樣間隔。"""
+        return SettleRule(
+            samples=self.cfg.settle_samples,
+            window_sec=(self.cfg.settle_samples - 1) * self.cfg.settle_interval_sec,
+            max_age_sec=self.cfg.settle_interval_sec,
+            notify_margin=self.cfg.notify_margin,
+            top_level=TOP_LEVEL,
+        )
 
-        同一筆導航資料只算一次：若 stamp 沒變，不計入連續次數，免得導航更新慢時
-        把同一筆讀五次當成「穩定 1 秒」。
+    def settle(self, cp: Checkpoint) -> Settled:
+        """等到在容差內連續待滿 1 秒（stable=True），或逾時（回傳最後一次判定）。
+
+        「連續待滿」怎麼算在 kibo.settle；這裡只負責拿姿態、看時鐘、決定要求幾級。
+        先看移動尾段留下的導航紀錄：夠格就不用再等。否則每 settle_interval_sec 讀一筆，
+        前 settle_strict_sec 秒用較嚴的標準（離 Lv3 上限留兩成），之後照一般標準。
         """
-        already = self.settled_already(cp)
-        if already is not None:
-            return already
+        rule = self.settle_rule()
+        watch = Steadiness(cp, rule)
+        tail = self.robot.recent_poses(rule.window_sec + self.cfg.settle_interval_sec)
+        if watch.feed_tail(tail, self.robot.now(), self.required_level()):
+            self.last_pose = tail[-1]
+            return Settled(watch.last, True)
+        if watch.tail_report:
+            self.log("tail of the move not usable: " + watch.tail_report)
+
         deadline = self.robot.now() + self.cfg.settle_timeout_sec
         strict_until = self.robot.now() + self.cfg.settle_strict_sec
-        streak = 0
-        last: Optional[Judgement] = None
-        last_stamp: Optional[float] = None
         max_samples = int(self.cfg.settle_timeout_sec / self.cfg.settle_interval_sec) + 2
         for _ in range(max_samples):
             if self.robot.now() > deadline or self.robot.stop_requested():
@@ -308,63 +323,12 @@ class _Run:
             pose = self.current_pose()
             if pose is None:
                 return Settled(None, False)
-            if pose.stamp is not None and pose.stamp == last_stamp:
-                self.robot.sleep(self.cfg.settle_interval_sec)
-                continue
-            last_stamp = pose.stamp
-            last = judge(pose, cp)
             strict = self.robot.now() < strict_until
-            streak = streak + 1 if self.good_enough(last, cp, strict) else 0
-            if streak >= self.cfg.settle_samples:
-                return Settled(last, True)
+            judgement = watch.feed(pose, self.required_level(), strict)
+            if judgement is not None and watch.stable:
+                return Settled(judgement, True)
             self.robot.sleep(self.cfg.settle_interval_sec)
-        return Settled(last, False)
-
-    def good_enough(self, judgement: Judgement, cp: Checkpoint, strict: bool) -> bool:
-        """這一筆判定夠不夠格算進「連續達標」。
-
-        一般標準是達到 required_level。`strict` 而且要求的是最高級（Lv3）時再加一條：
-        三個量都要在 Lv3 上限的 notify_margin 以內。原因：官方判定用的姿態最多舊 0.2 秒，
-        而 Goal 點（marker 12，視線幾乎正對 -X）的滾轉讀數會把 1° 的指向誤差放大成 7° 左右，
-        貼著 10° 回報很容易掉到 Lv2。"""
-        required = self.required_level()
-        if judgement.level < required:
-            return False
-        if strict and required >= TOP_LEVEL:
-            return top_band_usage(judgement, cp) <= self.cfg.notify_margin
-        return True
-
-    def settled_already(self, cp: Checkpoint) -> Optional[Settled]:
-        """移動尾段的導航紀錄若顯示已經連續達標夠久，直接算穩定；否則回 None，照常等。
-
-        「夠久」與 settle 迴圈同一個標準：settle_samples 筆以上、頭尾相隔至少
-        (settle_samples - 1) x settle_interval_sec（預設 1 秒），而且每一筆都達標。"""
-        window = (self.cfg.settle_samples - 1) * self.cfg.settle_interval_sec
-        history = self.robot.recent_poses(window + self.cfg.settle_interval_sec)
-        stamped = [p for p in history if p.stamp is not None]
-        if not stamped:
-            return None  # 這個機器人不提供紀錄
-        newest, oldest = stamped[-1].stamp, stamped[0].stamp
-        if newest is None or oldest is None:
-            return None
-        span, age = newest - oldest, self.robot.now() - newest
-        judgements = [judge(pose, cp) for pose in stamped]
-        worst = min(j.level for j in judgements)
-        usage = max(top_band_usage(j, cp) for j in judgements)
-        enough = (
-            len(stamped) >= self.cfg.settle_samples
-            and span >= window
-            and age <= self.cfg.settle_interval_sec
-        )
-        if not enough or not all(self.good_enough(j, cp, True) for j in judgements):
-            self.log(
-                "tail of the move not usable: %d samples over %.2fs, newest %.2fs old, "
-                "worst Lv%d, used %.0f%% of the Lv3 margin"
-                % (len(stamped), span, age, worst, usage * 100.0)
-            )
-            return None
-        self.last_pose = stamped[-1]
-        return Settled(judgements[-1], True)
+        return Settled(watch.last, False)
 
     def move(self, cp: Checkpoint, attempts: int) -> bool:
         target = Pose(cp.position, target_attitude(cp))
