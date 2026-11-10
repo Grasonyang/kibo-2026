@@ -12,7 +12,11 @@ uv sync --locked
 step "格式"
 uv run ruff format --check .
 step "靜態檢查"
-uv run ruff check . && uv run pyright && uv run vermin --target=3.6- --no-tips --violations src ros
+# 一行一個，不用 && 串起來：set -e 不管 && 串接裡「不是最後一個」的指令，
+# 串在一起時 ruff 或 pyright 失敗了腳本還是會往下跑（tests/test_check_script.py）。
+uv run ruff check .
+uv run pyright
+uv run vermin --target=3.6- --no-tips --violations src ros
 step "測試"
 uv run pytest
 printf '\n全部通過。\n'
