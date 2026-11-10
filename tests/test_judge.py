@@ -3,8 +3,8 @@ import math
 import pytest
 
 from kibo.checkpoints import parse_checkpoints
-from kibo.geometry import add, quat_mul, scale
-from kibo.judge import Pose, judge
+from kibo.geometry import Pose, add, quat_mul, scale
+from kibo.judge import judge
 
 
 @pytest.fixture
@@ -104,15 +104,6 @@ def test_target_attitude_falls_back_to_look_at_when_server_attitude_is_off(cp1):
     fixed = target_attitude(broken)
     assert fixed != pointing_away
     assert judge(Pose(broken.position, fixed), broken).centering_level == 3
-
-
-def test_camera_offset_switch_changes_centering_only(cp1):
-    # 預設照官方 judge.py 從機體中心量；camera_offset 留著只為了能回頭比較。
-    sideways = Pose(add(cp1.position, (0.15, 0.0, 0.0)), cp1.attitude)
-    from_body = judge(sideways, cp1)
-    with_camera = judge(sideways, cp1, camera_offset=(0.14, 0.0, 0.0))
-    assert with_camera.centering_deg > from_body.centering_deg
-    assert with_camera.position_level == from_body.position_level == 2
 
 
 # 黃金值：把官方模擬器 rootfs/krpc/judge_module/judge.py 的 _evaluate_centering_and_roll 與

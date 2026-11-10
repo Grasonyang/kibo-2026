@@ -2,7 +2,8 @@ import time
 
 from kibo.checkpoints import Checkpoint
 from kibo.geometry import IDENTITY_QUAT
-from kibo.planner import Speeds, leg_seconds, plan_route
+from kibo.motion import Speeds, leg_seconds
+from kibo.planner import plan_route
 
 
 def cp(cp_id, position, attitude=IDENTITY_QUAT):
@@ -52,7 +53,7 @@ def test_twelve_waypoints_plan_in_under_a_second():
 
 
 def _route_cost(start_pos, start_att, waypoints, goal, order):
-    from kibo.planner import leg_seconds
+    from kibo.motion import leg_seconds
 
     by_id = {w.id: w for w in waypoints}
     pos, att, total = start_pos, start_att, 0.0

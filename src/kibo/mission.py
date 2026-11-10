@@ -18,9 +18,9 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
-from kibo.geometry import Vec3, distance, norm, quat_angle
-from kibo.judge import JUDGE_ORIGIN, Judgement, Pose, judge, target_attitude, top_band_usage
-from kibo.planner import Speeds, leg_seconds
+from kibo.geometry import Pose, Vec3, distance, norm, quat_angle
+from kibo.judge import Judgement, judge, target_attitude, top_band_usage
+from kibo.motion import Speeds, leg_seconds
 from kibo.vision import body_correction, expected_marker_in_body
 
 ABORT_STOP = "stop requested"
@@ -108,7 +108,6 @@ class MissionConfig(NamedTuple):
     checkpoints_attempts: int = 3
     checkpoints_retry_sec: float = 1.0
     pose_attempts: int = 5
-    camera_offset_m: Vec3 = JUDGE_ORIGIN  # 官方 judge.py 的對中從機體中心量；不要改，留著只為對照
     camera_fix_max_m: float = (
         0.0  # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
     )
@@ -313,7 +312,7 @@ class _Run:
                 self.robot.sleep(self.cfg.settle_interval_sec)
                 continue
             last_stamp = pose.stamp
-            last = judge(pose, cp, self.cfg.camera_offset_m)
+            last = judge(pose, cp)
             strict = self.robot.now() < strict_until
             streak = streak + 1 if self.good_enough(last, cp, strict) else 0
             if streak >= self.cfg.settle_samples:
@@ -349,7 +348,7 @@ class _Run:
         if newest is None or oldest is None:
             return None
         span, age = newest - oldest, self.robot.now() - newest
-        judgements = [judge(pose, cp, self.cfg.camera_offset_m) for pose in stamped]
+        judgements = [judge(pose, cp) for pose in stamped]
         worst = min(j.level for j in judgements)
         usage = max(top_band_usage(j, cp) for j in judgements)
         enough = (

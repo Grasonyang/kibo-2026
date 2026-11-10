@@ -16,8 +16,8 @@
 from typing import Dict, NamedTuple, Optional, Sequence
 
 from kibo.geometry import Quat, Vec3, add, quat_conj, rotate, sub
-from kibo.judge import CAMERA_OFFSET
 
+CAMERA_OFFSET = (0.14, 0.0, 0.0)  # 相機在機體座標系的位置（公尺，手冊 5.13.2）
 MARKER_SIDE_M = 0.02  # 手冊 5.13.1：2 cm
 DICTIONARY_NAME = "DICT_4X4_50"  # 手冊只說 4x4，ID 1 到 12；50 是最小的 4x4 字典
 

@@ -14,17 +14,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from kibo.checkpoints import Checkpoint
 from kibo.geometry import Quat, Vec3
-from kibo.motion import DEFAULT_MOTION, MotionModel, move_seconds
-
-
-class Speeds(NamedTuple):
-    """規劃用的節奏：移動時間模型，乘上「實際比模型慢幾倍」。"""
-
-    slowdown: float = 1.0  # 1.0 = 照模型；任務中若實測比模型慢，會把它往上調
-    motion: MotionModel = DEFAULT_MOTION
-
-
-DEFAULT_SPEEDS = Speeds()
+from kibo.motion import leg_seconds
 
 
 class Leg(NamedTuple):
@@ -39,12 +29,6 @@ class Route(NamedTuple):
     @property
     def seconds(self) -> float:
         return sum(leg.seconds for leg in self.legs)
-
-
-def leg_seconds(
-    from_pos: Vec3, from_att: Quat, to_pos: Vec3, to_att: Quat, speeds: Speeds = DEFAULT_SPEEDS
-) -> float:
-    return speeds.slowdown * move_seconds(from_pos, from_att, to_pos, to_att, speeds.motion)
 
 
 CostFn = Callable[[Vec3, Quat, Vec3, Quat], float]

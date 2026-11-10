@@ -130,3 +130,19 @@ def move_seconds(
         + rotation_seconds(from_att, to_att, model)
         + model.overhead_sec
     )
+
+
+class Speeds(NamedTuple):
+    """規劃用的節奏：移動時間模型，乘上「實際比模型慢幾倍」。"""
+
+    slowdown: float = 1.0  # 1.0 = 照模型；任務中若實測比模型慢，會把它往上調
+    motion: MotionModel = DEFAULT_MOTION
+
+
+DEFAULT_SPEEDS = Speeds()
+
+
+def leg_seconds(
+    from_pos: Vec3, from_att: Quat, to_pos: Vec3, to_att: Quat, speeds: Speeds = DEFAULT_SPEEDS
+) -> float:
+    return speeds.slowdown * move_seconds(from_pos, from_att, to_pos, to_att, speeds.motion)

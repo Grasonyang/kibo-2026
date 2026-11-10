@@ -4,8 +4,7 @@
 """
 
 from kibo.fake_robot import FakeRobot, FakeRobotConfig
-from kibo.geometry import add, rotate
-from kibo.judge import Pose
+from kibo.geometry import Pose, add, rotate
 from kibo.mission import (
     DEFAULT_MISSION,
     MOVE_INVALID,

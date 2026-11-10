@@ -11,10 +11,10 @@ import random
 from typing import List, NamedTuple, Optional
 
 from kibo.checkpoints import CheckpointSet, parse_checkpoints
-from kibo.geometry import Quat, Vec3, add, normalize, quat_mul, quat_normalize, rotate
-from kibo.judge import Pose, judge
+from kibo.geometry import Pose, Quat, Vec3, add, normalize, quat_mul, quat_normalize, rotate
+from kibo.judge import judge
 from kibo.mission import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT, Robot
-from kibo.planner import Speeds, leg_seconds
+from kibo.motion import Speeds, leg_seconds
 from kibo.scoring import DEFAULT_SCORING, Scoring
 from kibo.vision import expected_marker_in_body
 

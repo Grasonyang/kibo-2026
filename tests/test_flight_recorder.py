@@ -2,7 +2,7 @@
 
 from kibo.fake_robot import FakeRobot, FakeRobotConfig
 from kibo.field import TIME_LIMIT_SEC
-from kibo.judge import Pose
+from kibo.geometry import Pose
 from kibo.mission import DEFAULT_MISSION, MOVE_INVALID, run_mission
 
 PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)

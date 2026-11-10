@@ -51,7 +51,7 @@ from platform_msgs.srv import StopProcessingUserNode, StopProcessingUserNodeResp
 from sensor_msgs.msg import CameraInfo, Image
 
 from kibo.buslinks import missing_listeners, topic_parties
-from kibo.judge import Pose
+from kibo.geometry import Pose
 from kibo.mission import (
     DEFAULT_MISSION,
     MOVE_ABORTED,

@@ -2,7 +2,7 @@
 
 from kibo.fake_robot import FakeRobot, FakeRobotConfig
 from kibo.mission import DEFAULT_MISSION, run_mission
-from kibo.planner import Speeds
+from kibo.motion import Speeds
 from kibo.scenarios import random_checkpoints_message
 
 NOISY = FakeRobotConfig(position_noise_m=0.05, move_fail_prob=0.1)
