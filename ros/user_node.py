@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 """ROS 接線層：把 Int-Ball2 的 topic、service、action 接到 kibo 的任務邏輯。
 
@@ -10,10 +10,17 @@ ROS 訊息 <-> kibo 的 Pose 與 MOVE_* 結果。決策全部在 kibo.mission。
 - 提供 /ib2_user/stop（停止要求：先取消動作再回應）
 - 設定 /ib2_user/ready = True
 
-執行環境是 Python 3.6.9 / ROS Melodic。尚未在模擬器實測。
+執行環境是 Python 3.6.9 / ROS Melodic。shebang 與官方範本相同（/usr/bin/python3；
+映像裡的 `python` 是 2.7）。
 """
 
+import os
+import sys
 import threading
+
+# kibo/ 由 scripts/sim.sh 同步到這個檔案旁邊。直接執行時 sys.path[0] 本來就是這裡；
+# 若日後改由 catkin 安裝後的包裝腳本啟動，這行讓 `import kibo` 仍然找得到。
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 import actionlib
 import rospy
@@ -433,7 +440,7 @@ class UserNode(object):
 
 
 def main():
-    rospy.init_node("krpc_user_node")
+    rospy.init_node("krpc_user")  # 官方用 /krpc_user 這個名字擷取 log、結束節點（run.sh）
     UserNode()
     rospy.spin()
 

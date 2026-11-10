@@ -132,6 +132,7 @@ include_directories(
 
 catkin_install_python(PROGRAMS
   scripts/user_template.py
+  scripts/user_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
