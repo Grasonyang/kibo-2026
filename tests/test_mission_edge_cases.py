@@ -261,16 +261,18 @@ class StillTurningRobot(FakeRobot):
     真的控制器就是這樣：姿態進到 0.5 rad 以內就回報成功，不等轉完。"""
 
     turning_until = 0.0
+    turning_sec = 2.0
+    residual_deg = 15.0
 
     def move_to(self, target, timeout_sec):
         result = super().move_to(target, timeout_sec)
-        self.turning_until = self.t + 2.0
+        self.turning_until = self.t + self.turning_sec
         return result
 
     def pose(self):
         pose = super().pose()
         if pose is not None and self.t < self.turning_until:
-            half = 7.5 * 3.141592653589793 / 180.0
+            half = self.residual_deg / 2.0 * 3.141592653589793 / 180.0
             from math import cos, sin
 
             from kibo.geometry import quat_mul
@@ -324,3 +326,34 @@ def test_when_the_rest_of_the_route_needs_the_time_it_settles_for_less():
     report = run_mission(robot, tight)
     assert [v.judged_level for v in report.visits] == [2, 2, 2]
     assert report.elapsed_sec <= tight.time_limit_sec
+
+
+class NearTheLimitRobot(StillTurningRobot):
+    """回報成功後 2 秒內滾轉還差 9°：算 Lv3（上限 10°），但只差 1°。"""
+
+    residual_deg = 9.0
+
+
+class StuckNearTheLimitRobot(NearTheLimitRobot):
+    turning_sec = 1000.0  # 一直停在 9°，不會再變好
+
+
+def test_with_time_to_spare_it_does_not_report_right_at_the_edge_of_level_3():
+    # 官方用的姿態最多舊 0.2 秒，Goal 點的滾轉讀數又會晃；貼著 10° 回報很容易被判成 Lv2。
+    # 有餘裕就等讀數降到上限的八成以內。
+    message = _realistic_message()
+    robot = NearTheLimitRobot(message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert [v.judged_level for v in report.visits] == [3, 3, 3]
+    reported = [line for line in robot.logs if line.split("] ", 1)[-1].startswith("at #")]
+    assert all("roll=0.0" in line for line in reported), reported
+
+
+def test_a_reading_that_stays_near_the_edge_is_reported_after_a_few_seconds():
+    # 等不到更好的讀數也不能一直等：幾秒後照 Lv3 回報。
+    message = _realistic_message()
+    robot = StuckNearTheLimitRobot(message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert [v.judged_level for v in report.visits] == [3, 3, 3]
+    assert all(v.stable and v.notified for v in report.visits)
+    assert robot.move_calls == 3  # 沒有為此多移動一次

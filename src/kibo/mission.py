@@ -19,7 +19,7 @@ from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Vec3, distance, norm, quat_angle
-from kibo.judge import JUDGE_ORIGIN, Judgement, Pose, judge, target_attitude
+from kibo.judge import JUDGE_ORIGIN, Judgement, Pose, judge, target_attitude, top_band_usage
 from kibo.planner import Speeds, leg_seconds
 from kibo.vision import body_correction, expected_marker_in_body
 
@@ -100,6 +100,8 @@ class MissionConfig(NamedTuple):
     target_level: int = 3
     hurry_sec: float = 5.0  # 這一點的餘裕（剩餘時間扣掉後面還要飛的）少於這個，就不再追求 Lv3
     refine_sec: float = 15.0  # 餘裕多於這個，沒穩定時才值得再移動一次去修正
+    notify_margin: float = 0.8  # 有餘裕時，先等到三個量都在 Lv3 上限的這個比例以內才回報
+    settle_strict_sec: float = 3.0  # 上面那個較嚴的標準最多等這麼久，之後照一般的 Lv3 標準
     notify_attempts: int = 2
     checkpoints_attempts: int = 3
     checkpoints_retry_sec: float = 1.0
@@ -291,6 +293,7 @@ class _Run:
         if already is not None:
             return already
         deadline = self.robot.now() + self.cfg.settle_timeout_sec
+        strict_until = self.robot.now() + self.cfg.settle_strict_sec
         streak = 0
         last: Optional[Judgement] = None
         last_stamp: Optional[float] = None
@@ -306,11 +309,25 @@ class _Run:
                 continue
             last_stamp = pose.stamp
             last = judge(pose, cp, self.cfg.camera_offset_m)
-            streak = streak + 1 if last.level >= self.required_level() else 0
+            strict = self.robot.now() < strict_until
+            streak = streak + 1 if self.good_enough(last, cp, strict) else 0
             if streak >= self.cfg.settle_samples:
                 return Settled(last, True)
             self.robot.sleep(self.cfg.settle_interval_sec)
         return Settled(last, False)
+
+    def good_enough(self, judgement: Judgement, cp: Checkpoint, strict: bool) -> bool:
+        """這一筆判定夠不夠格算進「連續達標」。
+
+        一般標準是達到 required_level。`strict` 而且不趕時間時再加一條：三個量都要在 Lv3 上限的
+        notify_margin 以內。原因：官方判定用的姿態最多舊 0.2 秒，而 Goal 點（marker 12，視線
+        幾乎正對 -X）的滾轉讀數會把 1° 的指向誤差放大成 7° 左右，貼著 10° 回報很容易掉到 Lv2。"""
+        required = self.required_level()
+        if judgement.level < required:
+            return False
+        if strict and required >= self.cfg.target_level:
+            return top_band_usage(judgement, cp) <= self.cfg.notify_margin
+        return True
 
     def settled_already(self, cp: Checkpoint) -> Optional[Settled]:
         """移動尾段的導航紀錄若顯示已經連續達標夠久，直接算穩定；否則回 None，照常等。
@@ -326,18 +343,19 @@ class _Run:
         if newest is None or oldest is None:
             return None
         span, age = newest - oldest, self.robot.now() - newest
-        required = self.required_level()
         judgements = [judge(pose, cp, self.cfg.camera_offset_m) for pose in stamped]
         worst = min(j.level for j in judgements)
+        usage = max(top_band_usage(j, cp) for j in judgements)
         enough = (
             len(stamped) >= self.cfg.settle_samples
             and span >= window
             and age <= self.cfg.settle_interval_sec
         )
-        if not enough or worst < required:
+        if not enough or not all(self.good_enough(j, cp, True) for j in judgements):
             self.log(
-                "tail of the move not usable: %d samples over %.2fs, newest %.2fs old, worst Lv%d"
-                % (len(stamped), span, age, worst)
+                "tail of the move not usable: %d samples over %.2fs, newest %.2fs old, "
+                "worst Lv%d, used %.0f%% of the Lv3 margin"
+                % (len(stamped), span, age, worst, usage * 100.0)
             )
             return None
         self.last_pose = stamped[-1]

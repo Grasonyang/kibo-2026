@@ -179,3 +179,30 @@ def test_judge_matches_the_official_judge_module(
     assert result.distance_m == pytest.approx(dist, abs=1e-9)
     assert result.centering_deg == pytest.approx(centering, abs=1e-4)
     assert result.roll_deg == pytest.approx(roll, abs=1e-4)
+
+
+def test_top_band_usage_is_the_tightest_of_the_three_margins(cp1):
+    from kibo.judge import top_band_usage
+
+    rolled = quat_mul(cp1.attitude, body_rotation((1.0, 0.0, 0.0), 8.0))
+    assert top_band_usage(judge(Pose(cp1.position, rolled), cp1), cp1) == pytest.approx(0.8)
+    # 側偏 5 cm：位置用掉 0.05/0.1 = 5 成，對中 atan(0.05/0.5) = 5.7° 用掉 5.7 成
+    sideways = judge(Pose(add(cp1.position, (0.05, 0.0, 0.0)), cp1.attitude), cp1)
+    assert top_band_usage(sideways, cp1) == pytest.approx(0.571, abs=0.001)
+
+
+def test_roll_reading_at_the_goal_marker_amplifies_small_pointing_errors():
+    # 官方的滾轉是對「機體到 marker」軸做 twist 分解。Goal（marker 12）的視線幾乎正對世界 -X，
+    # 姿態接近繞垂直軸轉 180°，分解在那附近是病態的：只有 1.5° 的指向誤差（機體完全沒滾），
+    # 讀數就可能超過 5°。同樣的誤差在其他 marker 只讀到 2° 以內。
+    from kibo.scenarios import random_checkpoints_message
+
+    worst = {}
+    for seed in range(10):
+        for cp in parse_checkpoints(random_checkpoints_message(12, seed)).checkpoints:
+            for axis in ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)):
+                off = quat_mul(cp.attitude, body_rotation(axis, 1.5))
+                reading = judge(Pose(cp.position, off), cp).roll_deg
+                worst[cp.id] = max(worst.get(cp.id, 0.0), reading)
+    assert worst[12] > 5.0
+    assert all(reading < 2.5 for cp_id, reading in worst.items() if cp_id != 12)

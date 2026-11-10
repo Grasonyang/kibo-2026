@@ -65,6 +65,21 @@ def level_for(value: float, bands: List[Band]) -> int:
     return 0
 
 
+def top_band_usage(judgement: Judgement, checkpoint: Checkpoint) -> float:
+    """最嚴那一級（Lv3）的餘裕用掉幾成：三個量各自除以自己的 Lv3 上限，取最大的。
+
+    0.8 代表最吃緊的那一項離 Lv3 的上限還有兩成；超過 1 就不是 Lv3 了。沒有餘裕表的項目不算。"""
+    usage = 0.0
+    for value, bands in (
+        (judgement.distance_m, checkpoint.position_bands),
+        (judgement.centering_deg, checkpoint.centering_bands),
+        (judgement.roll_deg, checkpoint.roll_bands),
+    ):
+        if bands and bands[0].limit > 0.0:
+            usage = max(usage, value / bands[0].limit)
+    return usage
+
+
 def camera_position(pose: Pose, camera_offset: Vec3 = CAMERA_OFFSET) -> Vec3:
     return add(pose.position, rotate(pose.orientation, camera_offset))
 
