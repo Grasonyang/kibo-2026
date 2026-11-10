@@ -30,7 +30,9 @@ def test_half_speed_robot_reaches_goal_far_more_often_with_calibration():
     goals_off, score_off, _ = fleet(2.0, WITHOUT)
     goals_on, score_on, calibrated = fleet(2.0, DEFAULT_MISSION)
     assert goals_on - goals_off >= 3
-    assert score_on > score_off * 2.0
+    # 沒校正的那一邊到不了 Goal，但移動的逾時不越過時限，仍然準時送出完成回報、保住已通過的點；
+    # 所以差距不是「有分對 0 分」，而是多了 Goal 與更多的點。
+    assert score_on > score_off * 1.5
     assert calibrated == 6
 
 
@@ -63,6 +65,28 @@ def test_a_second_of_overhead_per_move_stays_inside_the_deadband(three_point_mes
     robot = FakeRobot(three_point_message, NOISY._replace(move_overhead_sec=1.0))
     run_mission(robot, DEFAULT_MISSION)
     assert not any("speed calibrated" in line for line in robot.logs)
+
+
+def test_fifteen_percent_slower_is_outside_the_deadband():
+    # 慢 15% 以前落在死區裡（慢 25% 才校正），現在要校正：這是新門檻（慢 11%）的依據。
+    quiet = FakeRobotConfig(position_noise_m=0.01, speeds=Speeds(slowdown=1.15))
+    robot = FakeRobot(random_checkpoints_message(8, 3), quiet, 3)
+    run_mission(robot, DEFAULT_MISSION)
+    assert any("speed calibrated" in line and "x1.15" in line for line in robot.logs)
+
+
+def test_the_short_move_that_refines_a_point_is_not_calibration_evidence():
+    # 修正用的再移動，起點是一筆沒穩定的讀數，算出來的預測秒數不可信：曾經因為一段
+    # 「預測 14 秒、實際 4.5 秒」的再移動，把已經校正到 1.17 的速度拉回 1.00，Goal 那一段就估短了。
+    from test_time_safety import NeverSteady
+
+    slow = FakeRobotConfig(position_noise_m=0.01, speeds=Speeds(slowdown=1.2))
+    for seed in range(6):
+        robot = NeverSteady(random_checkpoints_message(8, seed), slow, seed)
+        run_mission(robot, DEFAULT_MISSION)
+        calibrated = [line for line in robot.logs if "speed calibrated" in line]
+        assert calibrated
+        assert not any("-> 1.00" in line for line in calibrated)
 
 
 def test_long_leg_gets_a_longer_timeout(three_point_message):
