@@ -6,8 +6,8 @@ set -euo pipefail
 source "$(dirname "$0")/_common.sh"
 
 [ $# -eq 1 ] || { echo "用法：$0 <krpc7th-simulator.tar.gz>" >&2; exit 1; }
-mkdir -p "$root/sim"
-tar -xf "$1" -C "$root/sim"
+mkdir -p "$sim_root"
+tar -xf "$1" -C "$sim_root"
 require_sim
 
 if [ -d "$root/krpc_user" ]; then

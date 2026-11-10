@@ -1,6 +1,10 @@
 # 供其他腳本 source：共用路徑與檢查。
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-sim_dir="$root/sim/krpc7th-simulator"
+# 模擬器只解壓一份，放在主 checkout 的 sim/，所有 worktree 共用（Docker image 與 share/logs 也共用）。
+# 要換位置就設 KIBO_SIM_ROOT。
+main_root="$(git -C "$root" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
+sim_root="${KIBO_SIM_ROOT:-${main_root:-$root}/sim}"
+sim_dir="$sim_root/krpc7th-simulator"
 user_pkg="$sim_dir/users/catkin_ws/src/krpc_user"
 
 require_sim() {

@@ -26,6 +26,8 @@ packages = ["src/kibo"]
 line-length = 100
 target-version = "py37"
 src = ["src", "tests"]
+# krpc_user/ 的範本是官方檔案，照原樣保留（方便日後與新版比對），不套我們的格式。
+extend-exclude = ["krpc_user/scripts/user_template.py"]
 
 [tool.ruff.lint]
 # UP 系列會把語法升到 3.7 以後，執行環境是 3.6，所以不啟用。
