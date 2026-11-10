@@ -116,6 +116,7 @@ class MissionConfig(NamedTuple):
     skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
     deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
     calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
+    log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
 
     @property
     def probes_on(self) -> bool:
@@ -389,6 +390,38 @@ class _Run:
         )
         return result == MOVE_SUCCESS
 
+    def log_marker(self, cp: Checkpoint) -> None:
+        """只記錄、不影響任務：相機看到的 marker 在哪，照導航算又該在哪。
+
+        兩者差多少，就是相機這條路（字典、marker 邊長、座標換算）可不可信的證據；
+        在開啟相機修正之前，先用這行 log 累積資料。任何失敗都只記一行。"""
+        if not self.cfg.log_marker or self.last_pose is None:
+            return
+        try:
+            observed = self.robot.marker_in_body(cp.id)
+        except Exception as exc:  # 診斷碼不能讓任務出事
+            self.log("marker #%d check failed: %r" % (cp.id, exc))
+            return
+        if observed is None:
+            self.log("marker #%d not seen" % cp.id)
+            return
+        pose = self.last_pose
+        expected = expected_marker_in_body(pose.position, pose.orientation, cp.marker_position)
+        self.log(
+            "marker #%d seen at body (%.3f, %.3f, %.3f), nav expects (%.3f, %.3f, %.3f), "
+            "apart %.3fm"
+            % (
+                cp.id,
+                observed[0],
+                observed[1],
+                observed[2],
+                expected[0],
+                expected[1],
+                expected[2],
+                distance(observed, expected),
+            )
+        )
+
     def visit(self, cp: Checkpoint) -> Visit:
         moved = self.move(cp, self.cfg.max_move_attempts)
         settled = self.settle(cp)
@@ -403,6 +436,7 @@ class _Run:
         # 也不回報。探針旗標 notify_even_if_level0 可以在模擬器上覆寫這兩條。
         should_notify = (settled.level > 0 and moved) or self.cfg.notify_even_if_level0
         notified = should_notify and self.notify(cp)
+        self.log_marker(cp)  # 通知送出之後才做，不拖慢回報
         notified_so_far = sum(1 for v in self.visits if v.notified) + (1 if notified else 0)
         if self.cfg.deliberate_late_after and notified_so_far == self.cfg.deliberate_late_after:
             self.log("PROBE: deliberately waiting past the time limit")

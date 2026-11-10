@@ -111,3 +111,24 @@ def test_deliberate_late_counts_notified_checkpoints_and_honours_stop(three_poin
     report = run_mission(robot, DEFAULT_MISSION._replace(deliberate_late_after=1))
     assert report.aborted == "stop requested"
     assert robot.t < 300.0  # 等到一半就被停下來，沒有硬睡到逾時
+
+
+def test_log_compares_what_the_camera_sees_with_what_navigation_expects(three_point_message):
+    import re
+
+    robot = FakeRobot(three_point_message, PERFECT._replace(camera=True, vision_noise_m=0.0))
+    run_mission(robot, DEFAULT_MISSION)
+    lines = [line for line in robot.logs if "marker #1 seen" in line]
+    assert len(lines) == 1
+    match = re.search(r"apart ([\d.]+)m", lines[0])
+    assert match is not None
+    apart = float(match.group(1))
+    assert apart < 0.01  # 假相機沒有誤差，導航也準：兩者應該重合
+    assert robot.relative_calls == 0  # 只記錄，沒有因此多動一下
+
+
+def test_a_robot_without_a_camera_just_says_the_marker_was_not_seen(three_point_message):
+    robot = FakeRobot(three_point_message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert any("marker #1 not seen" in line for line in robot.logs)
+    assert report.goal_reached
