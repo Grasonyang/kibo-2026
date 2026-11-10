@@ -67,6 +67,13 @@ ROS 相關程式（要 `import rospy`、`krpc_ib2_msgs`）只能在模擬器的�
 
 需要 Docker，約 6 GB image、40 GB 空間。本機是 aarch64，`build.sh` 要加 `--arm64`（手冊 4.4.3）；`scripts/sim.sh` 已處理。用法見 [docs/kibo/simulator.md](../kibo/simulator.md)。
 
+跑模擬器時要守的四件事（每一件都實際出過事）：
+
+- **以官方的結果為準**：跑完用 `uv run python scripts/sim_report.py --last 1` 看 `result.json` 的等級。節點自己的 log 顯示「任務完成」不代表有成績。
+- **「無成績」先分辨是誰的問題**：`judge_module_logs/judge.log` 有 `before mission start` 是起跑保護沒擋住；`system.log` 有 `Plugins for the model will not be loaded` 是模擬器自己啟動失敗，重跑即可。
+- **背景連跑多場時不要改 `src/`、`ros/`、`krpc_user/`**：`scripts/sim.sh run` 每一場啟動時才同步程式碼，後面的場次會吃到改到一半的檔案。要改就開另一個 worktree。
+- **一次只能跑一場**：容器名稱與埠是固定的。埠被占用時設 `KIBO_SIM_PORT`。
+
 ## 共用工具基線
 
 核對日期：2026-11-03，本機實際版本。
