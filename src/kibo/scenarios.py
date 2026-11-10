@@ -18,7 +18,7 @@ import random
 from typing import Dict, List
 
 from kibo.field import MARKERS, SAFE_AREA_MAX, SAFE_AREA_MIN, Marker
-from kibo.geometry import Quat, Vec3, add, look_at, quat_mul, rotate, scale
+from kibo.geometry import FORWARD, Vec3, add, axis_angle_quat, look_at, quat_mul, rotate, scale
 
 BANDS_POSITION = [
     {"radius": 0.1, "level": 3},
@@ -37,11 +37,6 @@ CHECKPOINT_DISTANCE_M = 0.5
 YAW_RANGE_DEG = 20.0
 PITCH_RANGE_DEG = 15.0
 SAFE_AREA_MAX_RETRY = 50
-
-
-def _roll_quat(degrees: float) -> Quat:
-    half = math.radians(degrees) / 2.0
-    return (math.sin(half), 0.0, 0.0, math.cos(half))
 
 
 def _inside_safe_area(position: Vec3) -> bool:
@@ -78,7 +73,7 @@ def checkpoint_position(marker: Marker, rng: random.Random) -> Vec3:
 def checkpoint_from_marker(marker: Marker, rng: random.Random) -> Dict:
     position = checkpoint_position(marker, rng)
     attitude = look_at(position, marker.pose.position)
-    attitude = quat_mul(attitude, _roll_quat(rng.uniform(-180.0, 180.0)))
+    attitude = quat_mul(attitude, axis_angle_quat(FORWARD, rng.uniform(-180.0, 180.0)))
     return {
         "checkpoint_id": marker.id,
         "position": list(position),
@@ -95,10 +90,18 @@ def checkpoint_from_marker(marker: Marker, rng: random.Random) -> Dict:
     }
 
 
+MIN_COUNT = 2  # Goal 加至少一個中途點
+
+
+def valid_count(count: int) -> bool:
+    """一場的 CheckPoint 總數（含 Goal）合不合理。"""
+    return MIN_COUNT <= count <= len(MARKERS)
+
+
 def random_checkpoints_message(count: int, seed: int = 0) -> str:
     """count 包含 Goal；官方四個難度是 6、8、10、12（`LEVEL_COUNTS`）。回傳的清單照 id 排序。"""
-    if not 2 <= count <= len(MARKERS):
-        raise ValueError("count must be between 2 and %d" % len(MARKERS))
+    if not valid_count(count):
+        raise ValueError("count must be between %d and %d" % (MIN_COUNT, len(MARKERS)))
     rng = random.Random(seed)
     others = [m for m in MARKERS.values() if m.id != GOAL_MARKER_ID]
     chosen: List[Marker] = rng.sample(others, count - 1) + [MARKERS[GOAL_MARKER_ID]]

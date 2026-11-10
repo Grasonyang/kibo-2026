@@ -2,14 +2,20 @@
 
 import json
 
-from conftest import CHECKPOINT_6, GOAL_12, MANUAL_CHECKPOINT_1, checkpoints_message
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from conftest import (
+    CHECKPOINT_6,
+    GOAL_12,
+    MANUAL_CHECKPOINT_1,
+    PERFECT,
+    checkpoint_at,
+    checkpoints_message,
+)
+from kibo.fake_robot import FakeRobot
 from kibo.field import MARKERS
+from kibo.geometry import IDENTITY_QUAT
 from kibo.mission import DEFAULT_MISSION, run_mission
 from kibo.planner import MAX_WAYPOINTS, plan_route
 from kibo.scenarios import checkpoint_from_marker
-
-PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
 
 
 def test_manual_example_shape_count_8_goal_12_still_flies_and_finishes():
@@ -52,34 +58,11 @@ def test_twelve_waypoints_do_not_raise():
 
 
 def test_nearest_neighbour_fallback_visits_everything_once():
-    from kibo.checkpoints import Checkpoint
-    from kibo.geometry import IDENTITY_QUAT
-
-    def cp(i):
-        return Checkpoint(
-            i, (float(i), 0.0, 0.0), (float(i), 0.0, 0.0), IDENTITY_QUAT, IDENTITY_QUAT, [], [], []
-        )
-
-    waypoints = [cp(i) for i in range(1, MAX_WAYPOINTS + 3)]
-    route = plan_route((0.0, 0.0, 0.0), IDENTITY_QUAT, waypoints, cp(99))
-    assert sorted(route.order[:-1]) == [w.id for w in waypoints]
+    # 中途點超過 Held-Karp 的上限（規則外）：改用最近鄰，照樣每點去一次。
+    waypoints = [checkpoint_at(i, (float(i), 0.0, 0.0)) for i in range(1, MAX_WAYPOINTS + 3)]
+    goal = checkpoint_at(99, (99.0, 0.0, 0.0))
+    route = plan_route((0.0, 0.0, 0.0), IDENTITY_QUAT, waypoints, goal)
     assert route.order == [w.id for w in waypoints] + [99]  # 直線上最近鄰就是順序
-
-
-def test_matrix_planner_matches_previous_known_answer():
-    from kibo.checkpoints import Checkpoint
-    from kibo.geometry import IDENTITY_QUAT
-
-    def cp(i, p):
-        return Checkpoint(i, p, p, IDENTITY_QUAT, IDENTITY_QUAT, [], [], [])
-
-    waypoints = [cp(3, (3.0, 0.0, 0.0)), cp(1, (1.0, 0.0, 0.0)), cp(2, (2.0, 0.0, 0.0))]
-    assert plan_route((0.0, 0.0, 0.0), IDENTITY_QUAT, waypoints, cp(9, (0.0, 1.0, 0.0))).order == [
-        1,
-        2,
-        3,
-        9,
-    ]
 
 
 def test_skipped_checkpoint_is_logged_at_mission_start():

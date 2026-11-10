@@ -14,7 +14,7 @@ bands 一律由嚴到寬排序（Lv3 在前），方便判定時從最高等級�
 import json
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from kibo.geometry import Quat, Vec3, look_at
+from kibo.geometry import Quat, Vec3, angle_between, forward, look_at, sub
 
 
 class Band(NamedTuple):
@@ -26,7 +26,7 @@ class Checkpoint(NamedTuple):
     id: int
     position: Vec3
     marker_position: Vec3
-    marker_orientation: Quat
+    marker_orientation: Quat  # 目前沒有程式讀它；留著是因為清單格式有這一欄，缺了代表資料壞了
     attitude: Quat  # 伺服器指定的目標姿態
     position_bands: List[Band]
     centering_bands: List[Band]
@@ -140,3 +140,17 @@ def parse_checkpoints(message: str) -> CheckpointSet:
         )
         goal_id = ids[-1]
     return CheckpointSet(checkpoints=checkpoints, goal_id=goal_id, warnings=tuple(warnings))
+
+
+def target_attitude(checkpoint: Checkpoint) -> Quat:
+    """要用哪個姿態去 CheckPoint。
+
+    正常用伺服器給的 attitude（官方產生器保證它從 CheckPoint 位置正對 marker）。保險：
+    若那個姿態的對中角超過最嚴的餘裕，就自己算一個「正對 marker、滾轉盡量貼近伺服器姿態」的。
+    """
+    to_marker = sub(checkpoint.marker_position, checkpoint.position)
+    centering = angle_between(forward(checkpoint.attitude), to_marker)
+    strictest = checkpoint.centering_bands[0].limit if checkpoint.centering_bands else 180.0
+    if centering <= strictest:
+        return checkpoint.attitude
+    return look_at(checkpoint.position, checkpoint.marker_position, reference=checkpoint.attitude)

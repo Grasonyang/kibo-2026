@@ -70,23 +70,24 @@ def _worst_fan(wrench: Sequence[float]) -> float:
     return max(loads) - min(loads)
 
 
+def _unit(vector: Vec3) -> Vec3:
+    """單位向量；長度是零（沒有位移、沒有轉動）時方向無所謂，回機體 X 軸。"""
+    length = norm(vector)
+    if length <= 1e-9:
+        return (1.0, 0.0, 0.0)
+    return (vector[0] / length, vector[1] / length, vector[2] / length)
+
+
 def max_accel(direction_body: Vec3, model: MotionModel = DEFAULT_MOTION) -> float:
     """沿機體座標系某方向平移的最大加速度（m/s²）。"""
-    length = norm(direction_body)
-    if length <= 1e-9:
-        direction_body, length = (1.0, 0.0, 0.0), 1.0
-    unit = (direction_body[0] / length, direction_body[1] / length, direction_body[2] / length)
-    worst = _worst_fan((unit[0], unit[1], unit[2], 0.0, 0.0, 0.0))
-    return model.eta * model.fan_max_n / (worst * model.mass_kg)
+    x, y, z = _unit(direction_body)
+    return model.eta * model.fan_max_n / (_worst_fan((x, y, z, 0.0, 0.0, 0.0)) * model.mass_kg)
 
 
 def max_angular_accel(axis_body: Vec3, model: MotionModel = DEFAULT_MOTION) -> float:
     """繞機體座標系某軸轉動的最大角加速度（rad/s²）。"""
-    length = norm(axis_body)
-    if length <= 1e-9:
-        axis_body, length = (1.0, 0.0, 0.0), 1.0
-    unit = (axis_body[0] / length, axis_body[1] / length, axis_body[2] / length)
-    worst = _worst_fan((0.0, 0.0, 0.0, unit[0], unit[1], unit[2]))
+    x, y, z = _unit(axis_body)
+    worst = _worst_fan((0.0, 0.0, 0.0, x, y, z))
     return model.eta * model.fan_max_n / (worst * model.inertia_kgm2)
 
 
@@ -130,3 +131,19 @@ def move_seconds(
         + rotation_seconds(from_att, to_att, model)
         + model.overhead_sec
     )
+
+
+class Speeds(NamedTuple):
+    """規劃用的節奏：移動時間模型，乘上「實際比模型慢幾倍」。"""
+
+    slowdown: float = 1.0  # 1.0 = 照模型；任務中若實測比模型慢，會把它往上調
+    motion: MotionModel = DEFAULT_MOTION
+
+
+DEFAULT_SPEEDS = Speeds()
+
+
+def leg_seconds(
+    from_pos: Vec3, from_att: Quat, to_pos: Vec3, to_att: Quat, speeds: Speeds = DEFAULT_SPEEDS
+) -> float:
+    return speeds.slowdown * move_seconds(from_pos, from_att, to_pos, to_att, speeds.motion)

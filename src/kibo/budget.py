@@ -17,15 +17,8 @@ from typing import Dict, List, NamedTuple
 
 from kibo.checkpoints import Checkpoint
 from kibo.geometry import Quat, Vec3
-from kibo.planner import (
-    DEFAULT_SPEEDS,
-    MAX_WAYPOINTS,
-    Route,
-    Speeds,
-    leg_seconds,
-    plan_most_points,
-    plan_route,
-)
+from kibo.motion import DEFAULT_SPEEDS, Speeds, leg_seconds
+from kibo.planner import MAX_WAYPOINTS, Route, plan_most_points, plan_route
 
 
 class BudgetConfig(NamedTuple):

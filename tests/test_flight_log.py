@@ -1,11 +1,12 @@
-"""R4：校準與飛行記錄——穩定判定只計新資料、探針旗標、沒成功移動不回報、log 可算速度。"""
+"""任務留下的 log 與探針旗標（council R4 的「飛行記錄」）：穩定判定只計新資料、沒成功移動不回報、
+log 裡有每段腿的距離與秒數、探針旗標預設全關、報表工具認得 log 的格式。"""
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from conftest import PERFECT
+from kibo.ctl_result import MOVE_INVALID
+from kibo.fake_robot import FakeRobot
 from kibo.field import TIME_LIMIT_SEC
-from kibo.judge import Pose
-from kibo.mission import DEFAULT_MISSION, MOVE_INVALID, run_mission
-
-PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
+from kibo.geometry import Pose
+from kibo.mission import DEFAULT_MISSION, run_mission
 
 
 class StaleNavRobot(FakeRobot):
@@ -132,3 +133,24 @@ def test_a_robot_without_a_camera_just_says_the_marker_was_not_seen(three_point_
     report = run_mission(robot, DEFAULT_MISSION)
     assert any("marker #1 not seen" in line for line in robot.logs)
     assert report.goal_reached
+
+
+def test_sim_report_can_still_find_the_legs_in_the_log(three_point_message):
+    # scripts/sim_report.py 靠這兩種 log 行切出每段腿；log 的字改了，它會悄悄什麼都找不到。
+    import importlib.util
+    import os
+
+    path = os.path.join(os.path.dirname(__file__), "..", "scripts", "sim_report.py")
+    spec = importlib.util.spec_from_file_location("sim_report", path)
+    assert spec is not None and spec.loader is not None
+    sim_report = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sim_report)
+
+    robot = FakeRobot(three_point_message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    starts = [line for line in robot.logs if sim_report.LEG_START.search(line)]
+    ends = [sim_report.LEG_END.search(line) for line in robot.logs]
+    ends = [m for m in ends if m]
+    assert len(starts) == 3 and len(ends) == 3
+    assert [int(m.group(2)) for m in ends] == [v.checkpoint_id for v in report.visits]
+    assert all(m.group(3) == "success" for m in ends)

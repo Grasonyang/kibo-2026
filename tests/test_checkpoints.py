@@ -51,7 +51,8 @@ def test_one_broken_checkpoint_is_skipped_not_fatal():
 
 
 def test_missing_attitude_gets_a_look_at_attitude():
-    from kibo.judge import Pose, judge
+    from kibo.geometry import Pose
+    from kibo.judge import judge
 
     bare = json.loads(json.dumps(MANUAL_CHECKPOINT_1))
     del bare["attitude"]

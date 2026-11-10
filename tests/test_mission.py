@@ -1,11 +1,10 @@
 import pytest
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from conftest import PERFECT
+from kibo.fake_robot import FakeRobot
 from kibo.mission import DEFAULT_MISSION, run_mission
-from kibo.planner import Speeds
+from kibo.motion import Speeds
 from kibo.scenarios import random_checkpoints_message
-
-PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
 
 
 def test_perfect_robot_passes_every_checkpoint_at_level_3(three_point_message):

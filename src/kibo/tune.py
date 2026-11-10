@@ -11,9 +11,9 @@ import argparse
 import sys
 from typing import Dict, List, NamedTuple, Tuple
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from kibo.fake_robot import CAMERA_FIX_MAX_M, FakeRobot, FakeRobotConfig, fake_config
 from kibo.mission import DEFAULT_MISSION, MissionConfig, run_mission
-from kibo.scenarios import random_checkpoints_message
+from kibo.scenarios import random_checkpoints_message, valid_count
 from kibo.scoring import WORLD_NAMES, WORLDS
 
 
@@ -40,9 +40,6 @@ def variants() -> List[Variant]:
 
 def robot_variants(base: FakeRobotConfig) -> List[Tuple[str, FakeRobotConfig]]:
     return [("沒相機", base), ("有相機", base._replace(camera=True))]
-
-
-CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=0.3)
 
 
 class Row(NamedTuple):
@@ -90,15 +87,10 @@ def main(argv: List[str]) -> int:
     args = parser.parse_args(argv)
     if args.runs < 1:
         parser.error("--runs must be at least 1")
-    if not 2 <= args.checkpoints <= 12:
+    if not valid_count(args.checkpoints):
         parser.error("--checkpoints must be between 2 and 12")
 
-    base = FakeRobotConfig()
-    robot_cfg = base._replace(
-        position_noise_m=args.noise,
-        move_fail_prob=args.fail,
-        speeds=base.speeds._replace(slowdown=args.slowdown),
-    )
+    robot_cfg = fake_config(args.noise, args.fail, args.slowdown)
     print(
         "%d 場、%d 點、誤差 %.2fm、失敗率 %.0f%%、比模型慢 %.2f 倍"
         % (args.runs, args.checkpoints, args.noise, args.fail * 100, args.slowdown)
@@ -111,7 +103,11 @@ def main(argv: List[str]) -> int:
         print("--- %s ---" % robot_name)
         rows = [
             evaluate(
-                v._replace(config=v.config._replace(camera_fix_max_m=0.3 if cfg.camera else 0.0)),
+                v._replace(
+                    config=v.config._replace(
+                        camera_fix_max_m=CAMERA_FIX_MAX_M if cfg.camera else 0.0
+                    )
+                ),
                 args.runs,
                 args.checkpoints,
                 args.seed,

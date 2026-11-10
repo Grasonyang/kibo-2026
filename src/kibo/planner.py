@@ -14,17 +14,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from kibo.checkpoints import Checkpoint
 from kibo.geometry import Quat, Vec3
-from kibo.motion import DEFAULT_MOTION, MotionModel, move_seconds
-
-
-class Speeds(NamedTuple):
-    """規劃用的節奏：移動時間模型，乘上「實際比模型慢幾倍」。"""
-
-    slowdown: float = 1.0  # 1.0 = 照模型；任務中若實測比模型慢，會把它往上調
-    motion: MotionModel = DEFAULT_MOTION
-
-
-DEFAULT_SPEEDS = Speeds()
+from kibo.motion import leg_seconds
 
 
 class Leg(NamedTuple):
@@ -39,12 +29,6 @@ class Route(NamedTuple):
     @property
     def seconds(self) -> float:
         return sum(leg.seconds for leg in self.legs)
-
-
-def leg_seconds(
-    from_pos: Vec3, from_att: Quat, to_pos: Vec3, to_att: Quat, speeds: Speeds = DEFAULT_SPEEDS
-) -> float:
-    return speeds.slowdown * move_seconds(from_pos, from_att, to_pos, to_att, speeds.motion)
 
 
 CostFn = Callable[[Vec3, Quat, Vec3, Quat], float]
@@ -140,6 +124,17 @@ def _held_karp(
     return _unwind(table, waypoints, full, last)
 
 
+class _Pick(NamedTuple):
+    """目前最好的一組：去幾個中途點、總共幾秒、哪幾個（位元遮罩）、最後停在哪一個。
+
+    `last` 是 -1 代表只去 Goal。"""
+
+    points: int
+    seconds: float
+    mask: int
+    last: int
+
+
 def _best_subset(
     start_pos: Vec3,
     start_att: Quat,
@@ -156,17 +151,17 @@ def _best_subset(
     """
     n = len(waypoints)
     table = _table(start_pos, start_att, waypoints, goal, cost_fn)
-    chosen: Tuple[int, float, int, int] = (0, table.direct + per_stop_sec, 0, -1)
+    chosen = _Pick(points=0, seconds=table.direct + per_stop_sec, mask=0, last=-1)
     for (mask, i), seconds in table.best.items():
         count = bin(mask).count("1")
         total = seconds + table.to_goal[i] + per_stop_sec * (count + 1)
         if total > limit_sec:
             continue
-        if count > chosen[0] or (count == chosen[0] and total < chosen[1]):
-            chosen = (count, total, mask, i)
-    if chosen[3] < 0 or n == 0:
+        if count > chosen.points or (count == chosen.points and total < chosen.seconds):
+            chosen = _Pick(count, total, mask, i)
+    if chosen.last < 0 or n == 0:
         return []
-    return _unwind(table, waypoints, chosen[2], chosen[3])
+    return _unwind(table, waypoints, chosen.mask, chosen.last)
 
 
 def _route(

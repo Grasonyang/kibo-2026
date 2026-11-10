@@ -6,14 +6,9 @@
 規則書表 2.2.2-2 的四元數寫法不同（只到三位小數），但法線方向一致。
 """
 
-from typing import Dict, NamedTuple, Tuple
+from typing import Dict, NamedTuple
 
-Quaternion = Tuple[float, float, float, float]
-
-
-class Pose(NamedTuple):
-    position: Tuple[float, float, float]
-    orientation: Quaternion
+from kibo.geometry import Pose
 
 
 class Marker(NamedTuple):

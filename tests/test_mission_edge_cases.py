@@ -3,19 +3,13 @@
 每個情境用 FakeRobot 的子類別改掉一個行為，其餘照舊。
 """
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
-from kibo.geometry import add, rotate
-from kibo.judge import Pose
-from kibo.mission import (
-    DEFAULT_MISSION,
-    MOVE_INVALID,
-    MOVE_SUCCESS,
-    MOVE_TIMEOUT,
-    run_mission,
-)
+from conftest import PERFECT
+from kibo.ctl_result import MOVE_INVALID, MOVE_SUCCESS, MOVE_TIMEOUT
+from kibo.fake_robot import CAMERA_FIX_MAX_M, FakeRobot
+from kibo.geometry import FORWARD, Pose, add, axis_angle_quat, quat_mul, rotate
+from kibo.mission import DEFAULT_MISSION, run_mission
 
-PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
-CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=0.3)
+CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=CAMERA_FIX_MAX_M)
 SIDEWAYS_15CM = (0.0, 0.15, 0.0)  # 機體 +Y，與視線垂直：位置 Lv2、對中約 17° 也是 Lv2
 LOST_35CM = (0.0, 0.0, 0.35)  # 超出最寬的位置餘裕
 
@@ -272,12 +266,7 @@ class StillTurningRobot(FakeRobot):
     def pose(self):
         pose = super().pose()
         if pose is not None and self.t < self.turning_until:
-            half = self.residual_deg / 2.0 * 3.141592653589793 / 180.0
-            from math import cos, sin
-
-            from kibo.geometry import quat_mul
-
-            rolled = quat_mul(pose.orientation, (sin(half), 0.0, 0.0, cos(half)))
+            rolled = quat_mul(pose.orientation, axis_angle_quat(FORWARD, self.residual_deg))
             return Pose(pose.position, rolled, stamp=pose.stamp)
         return pose
 
@@ -371,3 +360,18 @@ def test_the_level_3_buffer_does_not_apply_when_only_level_2_is_wanted():
     assert [v.judged_level for v in report.visits] == [2, 2, 2]
     assert all(v.stable for v in report.visits)
     assert _seconds_between_arrival_and_report(robot, 12) < 2.0
+
+
+def test_a_fake_robot_that_stopped_before_the_move_returned_is_reported_at_once(
+    three_point_message,
+):
+    # 模擬器實測：action 回報成功前，機器人通常已經在目標上停了 1.5 秒左右。
+    settled_early = PERFECT._replace(settled_before_return_sec=1.5)
+    robot = FakeRobot(three_point_message, settled_early)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert all(v.stable and v.judged_level == 3 for v in report.visits)
+    assert _seconds_between_arrival_and_report(robot, 1) < 0.5
+    # 停得不夠久（0.5 秒）就還是要自己等滿
+    barely = FakeRobot(three_point_message, PERFECT._replace(settled_before_return_sec=0.5))
+    run_mission(barely, DEFAULT_MISSION)
+    assert _seconds_between_arrival_and_report(barely, 1) >= 1.0

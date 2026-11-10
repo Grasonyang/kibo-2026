@@ -8,6 +8,19 @@ import json
 
 import pytest
 
+from kibo.checkpoints import Checkpoint
+from kibo.fake_robot import FakeRobotConfig
+from kibo.geometry import IDENTITY_QUAT
+
+# 沒有任何誤差的假機器人：到點分毫不差、導航不抖。測流程時用，免得亂數干擾。
+PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
+
+
+def checkpoint_at(cp_id, position, attitude=IDENTITY_QUAT):
+    """只有位置與姿態的 CheckPoint（marker 就放在同一點、沒有餘裕表），測路線與預算用。"""
+    return Checkpoint(cp_id, position, position, IDENTITY_QUAT, attitude, [], [], [])
+
+
 MANUAL_CHECKPOINT_1 = {
     "checkpoint_id": 1,
     "position": [1.4421152111823452, -0.5013235815457989, 0.6649623093633403],

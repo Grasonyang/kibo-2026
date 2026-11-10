@@ -38,10 +38,11 @@
 |---|---|---|
 | 讀清單 | 跟伺服器要 CheckPoint，解析成程式用的結構 | `src/kibo/checkpoints.py` |
 | 排順序 | 從起點出發、每點各去一次、終點收尾，總時間最短。點數最多 12，用精確解 | `src/kibo/planner.py` |
-| 看時間 | 估計整條路要多久，加上安全餘裕，超過剩餘時間就刪點；終點永不刪 | `src/kibo/budget.py` |
+| 估時間 | 一次移動要幾秒：先平移再轉向，短程主要花在加減速，照控制器原始碼算 | `src/kibo/motion.py` |
+| 看時間 | 估計整條路要多久，加上保險，超過剩餘時間就改去「時間內能去最多點」的一組；終點永不刪 | `src/kibo/budget.py` |
 | 移動 | 叫機器人飛到指定位置與姿態，每點最多嘗試 2 次 | `src/kibo/mission.py` |
-| 自我檢查 | 用目前位置算三個條件各幾級，連續 5 次（涵蓋 1 秒）達標才算穩；沒穩就再靠近一次 | `src/kibo/judge.py` |
-| 回報 | 告訴伺服器「我到了」，由伺服器給分 | `src/kibo/mission.py` |
+| 自我檢查 | 照官方評分的算式算三個條件各幾級（`judge.py`）；在容差內連續待滿 1 秒才算穩（`settle.py`） | `src/kibo/judge.py`、`src/kibo/settle.py` |
+| 回報 | 告訴伺服器「我到了」。每個點官方只判第一次，所以沒把握不送 | `src/kibo/mission.py` |
 | 收尾 | 到終點、回報完成 | `src/kibo/mission.py` |
 
 ## 3. 程式碼怎麼分（圖「程式架構」）
@@ -53,91 +54,95 @@
 - **ROS 接線層 `ros/user_node.py`**：ROS 是機器人的「作業系統」；這層把 ROS 的訊息翻譯成
   任務邏輯看得懂的東西，自己不做決定。只能在 JAXA 的模擬器裡跑。
 - **`Robot` 介面**（`src/kibo/mission.py`）：任務邏輯需要機器人做的事，八個必要方法
-  （現在幾點、我在哪、飛去那裡、睡一下、任務開始、要清單、回報通過、回報完成）加兩個選用的（有沒有人叫停、寫 log）。
+  （現在幾點、我在哪、飛去那裡、睡一下、任務開始、要清單、回報通過、回報完成）加幾個選用的（有沒有人叫停、寫 log、最近幾秒的導航紀錄、相機看到的 marker、相對移動）。
   ROS 版實作一次，**假機器人**（`src/kibo/fake_robot.py`）再實作一次。
 
-為什麼要假機器人：沒有模擬器的電腦也能把整場任務跑完，看流程會不會卡、策略參數
-怎麼調。它不是物理模擬（等速飛、到點有隨機誤差、偶爾失敗），分數只能**相對比較**。
+為什麼要假機器人：不開模擬器（一場要七分鐘）也能把整場任務跑完，看流程會不會卡、策略參數
+怎麼調。它不是物理模擬：移動秒數用同一個時間模型算、到點有隨機誤差、偶爾失敗，裁判照官方規則。
+分數只能**相對比較**（各等級幾分、時間倍率怎麼算都還沒公布）。
 
-讀程式的順序建議：`mission.py`（流程）→ `budget.py` → `planner.py` → `judge.py` →
-`geometry.py`。每個檔案開頭都有白話說明。
+讀程式的順序建議：`mission.py`（流程）→ `settle.py`（何時算到了）→ `judge.py`（官方怎麼判）→
+`budget.py` → `planner.py` → `motion.py`（飛一段要幾秒）→ `geometry.py`。每個檔案開頭都有白話說明。
+ROS 那一側另外有三個不碰 ROS 的小模組：`navlog.py`（導航紀錄）、`ctl_result.py`（移動結果的對照）、
+`buslinks.py`（起跑前確認評分模組連上了）。
 
 ## 4. 在自己電腦跑一場
 
 ```bash
 uv sync --locked                                  # 第一次：裝工具
-uv run pytest                                     # 98 個測試，約 0.5 秒
-uv run python -m kibo.simulate --runs 10 --checkpoints 8        # 本機「資格賽」
+uv run pytest                                     # 全部測試，約 2 秒
+uv run python -m kibo.simulate --runs 10 --checkpoints 8        # 假機器人的「資格賽」
 uv run python -m kibo.simulate --runs 1 --checkpoints 6 -v      # 看一場的逐步 log
 uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08   # 刁難它
-uv run python -m kibo.tune --runs 20 --checkpoints 10                   # 四個規則世界的平均與最大後悔，有無相機各一表
-uv run python -m kibo.tune --runs 20 --checkpoints 12 --speed 0.05      # 真速只有一半時，看哪個變體撐得住
-uv run python -m kibo.simulate --runs 10 --checkpoints 8 --noise 0.08 --camera   # 開假相機
+uv run python -m kibo.simulate --runs 10 --checkpoints 12 --slowdown 2             # 機器人比模型慢一倍
+uv run python -m kibo.tune --runs 20 --checkpoints 10           # 幾種參數在四個規則世界的平均與最大後悔
 ```
 
-一場的 log 長這樣（`-v`），每行開頭是剩餘秒數：
+一場的 log 長這樣（`-v`），每行開頭是時鐘與剩餘秒數：
 
 ```
-[ 300.0s left] 6 checkpoints, goal #12
-[ 300.0s left] route [1, 2, 3, 5, 10, 12] (~204s)      ← 排好順序，估計 204 秒
-[ 278.6s left] move to #1 attempt 1: success
-[ 277.6s left] at #1: dist=0.05m centering=1.6 roll=0.0 -> Lv3 (stable)   ← 自我檢查三項，連續達標
-[ 276.6s left] checkpoint #1 accepted                   ← 伺服器收了
-...
-[ 144.1s left] move to #12 attempt 1: success
-[ 143.1s left] at #12: dist=0.03m centering=4.9 roll=1.3 -> Lv3 (stable)
-[ 142.1s left] checkpoint #12 accepted
-[ 142.1s left] mission finished: True
+[t=0.0  300.0s left] 6 checkpoints, goal #12
+[t=0.0  300.0s left] route [10, 5, 3, 2, 1, 12] (~198s)          ← 排好順序，估計 198 秒
+[t=51.5  248.5s left] move to #10 attempt 1: success
+[t=51.5  248.5s left] leg: 5.72m 145deg in 51.5s (model 51.5s)   ← 這段腿的實際秒數對模型
+[t=51.5  248.5s left] at #10: dist=0.02m centering=1.9 roll=0.3 -> Lv3 (stable) nav_age=0.05s
+                                                                 ← 自判三項；移動尾段已經穩了 1 秒，不用再等
+[t=51.8  248.2s left] checkpoint #10 accepted                    ← 通知送出（accepted 不代表通過）
+[t=51.8  248.2s left] marker #10 not seen                        ← 相機有沒有看到 marker（假機器人預設沒相機）
+[t=51.8  248.2s left] route [5, 3, 2, 1, 12] (~146s)             ← 每到一點重新規劃
 ```
 
 沒穩的時候會多兩行：`-> Lv2 (unstable)` 之後再 `move`，然後 `refined: at #12: ... -> Lv3 (stable)`。
 
+要跑**真的**模擬器：開發資源在官網 Download 頁，不用登入。步驟在 [docs/kibo/simulator.md](../kibo/simulator.md)，
+跑完用 `uv run python scripts/sim_report.py` 看每場的官方評分。
 
-要跑**真的**模擬器，需要 JAXA 的開發資源包（隊伍帳號登入下載），步驟在
-[docs/kibo/simulator.md](../kibo/simulator.md)。
+## 5. 哪些已經確定，哪些還是猜的
 
-## 5. 哪些數字是猜的，哪些結論站得住
+2026-11-10 起我們有官方模擬器，下面分三類。出處與實測數字在
+[simulator-internals.md](../kibo/simulator-internals.md) 與 [motion-model.md](../kibo/motion-model.md)。
 
-這些都是「拿到模擬器就要校正」的假設，集中列出來免得被當成事實：
+### 已經確定（讀官方原始碼，並在本機模擬器跑過）
 
-| 假設 | 在哪 | 怎麼校正 |
+| 事實 | 在哪 |
+|---|---|
+| 到點判定的三個算式：距離、對中（從**機體中心**量）、滾轉（對機體到 marker 的軸做 twist 分解）。自判與官方幾乎每一點都同級 | `judge.py`，測試有官方函式算出的黃金值 |
+| 每個 CheckPoint 只判第一次通知；通知回 accepted 不代表通過；完成回報時 Goal 會用當下姿態補判 | `fake_robot.py` 的假裁判照這個做 |
+| CheckPoint 離 marker 固定 0.5 m、偏航 ±20°／俯仰 ±15°、滾轉 ±180°；Goal 固定是 marker 12；難度只決定點數 6／8／10／12 | `scenarios.py`、`field.py` |
+| 一次移動要幾秒：先平移再轉向、bang-bang、加速度依機體方向。每段腿預測誤差約 1 秒 | `motion.py` |
+| 到點精度約 1 cm、1°。瓶頸是時間：12 點全去約要 340 秒 | 模擬器記錄 |
+| 起跑太快，評分模組會漏掉任務開始，整場沒有成績 | `ros/user_node.py` 的起跑保護 |
+| Goal 的滾轉讀數會把小誤差放大約 7 倍 | `settle.py` 的八成緩衝 |
+
+### 還不知道（分數在伺服器端算，要問主辦或上 Web 模擬器）
+
+| 問題 | 我們現在怎麼做 | 影響 |
 |---|---|---|
-| IB2 速度 0.1 m/s、轉速 15°/s | `planner.Speeds` | 看 log 每段 `leg:` 的實際秒數對模型；程式會自動往慢修，但預設值要改 |
-| 每點穩定 8 秒、終點保險 25 秒 | `budget.BudgetConfig` | 同上 |
-| 速度校正的門檻：慢 25% 才校正（`calibrate_below_ratio=0.8`）、只用 ≥ 1 m 的腿（`calibrate_min_leg_m`）、累積 20 秒模型時間才動（`calibrate_min_predicted_sec`）、最多調慢 2 倍 | `mission.MissionConfig` | 看 log 的 `leg:` 與 `speed calibrated` 行；假機器人的 3 秒起停（`fake_robot.move_overhead_sec`）也是猜的 |
-| Lv3/2/1 = 10/6/3 分、Goal 20 分、倍率線性 1 到 2 | `scoring.py` | Web 模擬器的結果 JSON；規則書引用的分數表不在 PDF 裡 |
-| **Goal 分數要不要求通過全部 CheckPoint**（A／B） | `scoring.Scoring.goal_requires_all` | 探針：故意漏一點看 `goal.success` |
-| **逾時會不會把已得分歸零**（T0／T1） | `scoring.Scoring.timeout_keeps_points` | 探針：故意逾時 |
-| 對中用「相機位置」算（相機在機頭前 14 cm）；手冊 6.3.1 的字面是「from the vehicle」 | `judge.py`，開關 `MissionConfig.camera_offset_m` | 比較 log 的 Lv 與結果 JSON 的 level |
-| 計時起點 = `/ib2_user/start` 到來的時刻（規則說是 Release 完成） | `mission.py` 的 `t0` | 比對結果 JSON 的 `duration_sec` |
-| CheckPoint 離 marker 0.4 到 0.7 m、偏法線 ≤ 20°；一場 6 到 12 點都要去 | `scenarios.py` | `cheat_sheet.json`；手冊 4.3.1 有「N/A 不評分」的點 |
-| ArUco 字典 `DICT_4X4_50` | `vision.py` | 範本或模擬器影像 |
-| Goal 在 CheckPoint 清單裡、id 就是 marker 編號 | `checkpoints.py`（不在也會降級飛完） | `cheat_sheet.json` |
+| 各等級幾分、Goal 幾分、時間倍率的公式（規則書只說最多 2 倍） | 假分數用 Lv3/2/1 = 10/6/3、Goal 20、倍率線性 1 到 2（`scoring.py`） | 倍率若很陡，繞路太遠的點可能不值得去；公式公布前一律「去最多點」 |
+| **Goal 分數要不要求通過全部 CheckPoint**（A／B） | 兩種都算（`scoring.Scoring.goal_requires_all`）。欄位名與規則書都傾向「要」 | 決定來不及時值不值得刪點 |
+| **逾時會不會把已得分歸零**（T0／T1） | 當作會：保險 15 秒，Goal 永不刪 | 決定保險留多少 |
+| Web 模擬器的擾動（微重力模組）有多大 | 本機沒有這個模組，沒測過 | 到點精度與時間都可能變差 |
+| 5 分鐘從哪裡起算 | 我們從起跑訊號算，比評分模組的起點早，偏保守 | 最多少用 10 秒 |
+| 資格賽用哪個難度 | 四個難度都測 | hard、veryhard 去不完，平均約 9 點 |
 
-一個已經確定的事：手冊給的範例姿態，用我們的算法算出來「正對 marker、誤差 0.0°」，
-所以座標與四元數的慣例是對的（`tests/test_geometry.py`）。
+問題清單與現況在 [questions-for-poc.md](../kibo/questions-for-poc.md)。
 
-### 假模型跑出來的結論，哪些能信
+### 假機器人跑出來的結論，哪些能信
 
-假機器人不是物理，所以每個結論都要問「換一個規則世界、換一個真實速度，名次還一樣嗎」。
-`python -m kibo.tune` 把四個規則世界（Goal 需不需要全點 × 逾時保不保留分數）並排印出來，
-並算「最大後悔」（在最不利的世界裡比最好的變體差幾分）。
+每個結論都要問「換一個規則世界、換一個真實速度，名次還一樣嗎」。`python -m kibo.tune` 把四個規則世界
+（Goal 需不需要全點 × 逾時保不保留分數）並排印出來，並算「最大後悔」。
 
-| 結論 | 跨世界、跨速度都成立？ | 說明 |
+| 結論 | 站得住嗎 | 說明 |
 |---|---|---|
-| **速度猜錯時，線上校正是最大的單一改善** | 是 | 真速只有一半（0.05）時，20 場、世界 B/T0、沒相機：8 點不校正 27 分、Goal 10/20 → 校正 75 分、20/20；12 點 57 分、14/20 → 89 分、19/20。`kibo.tune --speed 0.05` 的「不校正速度」在四個世界最大後悔 40 分，其餘 ≤ 7。速度猜對（0.1、0.2）時與不校正完全相同 |
-| **刪點保 Goal 是最不會後悔的選擇** | 是 | `kibo.tune` 的「不刪點（只做對照）」變體：四世界裡只在「Goal 需全點且逾時保留分」小輸幾分，其餘大輸（12 點、真速 0.1 時逾時世界整場 0） |
-| 相機修正有幫助 | **fake-sensitive** | 只在相對移動幾乎無誤差時成立；相對移動加 5 cm 雜訊，增益就消失。所以**預設關**（`camera_fix_max_m=0`），上機驗過座標再開 |
-| 只求 Lv2 比追 Lv3 好 | **fake-sensitive** | 取決於真實的 Lv 分數比與到點誤差，兩者都沒公布 |
-| 保險、穩定估值、趕時間門檻怎麼調 | **分不出來** | 差異 5–10 分，與資格賽 10 次平均的標準誤（單場 sd 12–17，標準誤約 4–5）同量級；拿到真資料前不調 |
-
-一個值得知道的發現：相機在機頭前 14 cm，marker 只離 50 cm，所以**側向偏 15 cm 就會讓
-對中掉到 Lv1**（若伺服器也用相機位置算）。位置要準，而且沿視線方向偏比側向偏好。
+| 機器人整體比模型慢時，線上校正是最大的單一改善 | 是 | 慢一倍、不校正，多半到不了 Goal；校正後幾乎都到（`tests/test_speed_calibration.py`）。模型準時校正完全不動 |
+| 刪點保 Goal 最不會後悔 | 是 | 「不刪點」只在「Goal 需全點且逾時保留分」的世界小贏 |
+| 相機修正有幫助 | **不成立（目前）** | 模擬器裡導航誤差只有 1 cm，而相機換算的深度與導航差約 15 cm。預設關，只記錄不動作 |
+| 保險、趕時間門檻怎麼調 | **看規則** | 保險 15 → 10 秒，veryhard 平均多 0.24 點；代價取決於逾時的規則與擾動，都還不知道 |
 
 ## 6. 還沒做的
 
-- ROS 接線層沒跑過（沒有模擬器）。第一次跑要核對的事列在 [ros/README.md](../../ros/README.md)。
-- 相機修正已接進流程但 ROS 端沒測過：主流程靠導航資料，只有「到了但不穩」時才用相機看 marker 修正幾公分（`src/kibo/vision.py`，合成影像測過）。假機器人可用 `--camera` 開假相機。
+- **Web 模擬器**沒上過（需要隊伍帳號）。第一次上去要核對的事列在 [ros/README.md](../../ros/README.md)。
+- 相機只用來記錄（每點一行「相機看到的 marker 位置對導航的預期位置」），沒有拿來修正位置。
 - 更多點子與取捨：[ideas.md](ideas.md)。規格：[spec.md](spec.md)。進度：[tickets.md](tickets.md)。第一輪的回顧：[retro.md](retro.md)。
-- 想問主辦的十個問題在 [docs/kibo/questions-for-poc.md](../kibo/questions-for-poc.md)，答案能省掉上機的兩場探針。
+- 想問主辦的問題在 [docs/kibo/questions-for-poc.md](../kibo/questions-for-poc.md)。
 - 第一版結案後開了一場 council（四位委員兩輪匿名互評，主席查證）：[notes/council/v1-review/synthesis.md](../../notes/council/v1-review/synthesis.md)，裁決 R1–R5 已實作（T14–T18，R6 是「停止」清單），待使用者確認。

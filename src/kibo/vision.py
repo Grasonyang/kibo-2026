@@ -1,7 +1,11 @@
-"""相機看 AR marker：從影像算出 marker 相對機體的位置（第二版的「到點後微調」用）。
+"""相機看 AR marker：從影像算出 marker 相對機體的位置。
 
-為什麼：導航給的位置可能漂移，但伺服器判定是以 marker 為基準的。相機直接看 marker
-得到的相對位置最接近伺服器用的基準，拿它和「目標上應該看到的位置」相減，就是該修正的量。
+目前只用來記錄（每到一點比對相機與導航，`MissionConfig.log_marker`）；拿它修正位置的功能
+預設關閉，因為模擬器裡換算出來的深度與導航差約 15 cm（docs/kibo/simulator-internals.md 的 E6）。
+
+原本的想法是「導航可能漂移，相機直接看 marker 比較準」。實測相反：模擬器的導航誤差只有 1 cm，
+官方評分也是用導航的姿態（不是 marker），所以相機沒有可以修正的東西。留著是因為規則書要求
+辨識 AR marker，而且實機的導航未必這麼準。
 
 執行環境是 OpenCV 3.3.1（手冊 5.13），本機開發是 5.x，兩邊的 ArUco API 不同：
 - 3.x：`Dictionary_get`、`DetectorParameters_create`、`detectMarkers`。
@@ -16,8 +20,8 @@
 from typing import Dict, NamedTuple, Optional, Sequence
 
 from kibo.geometry import Quat, Vec3, add, quat_conj, rotate, sub
-from kibo.judge import CAMERA_OFFSET
 
+CAMERA_OFFSET = (0.14, 0.0, 0.0)  # 相機在機體座標系的位置（公尺，手冊 5.13.2）
 MARKER_SIDE_M = 0.02  # 手冊 5.13.1：2 cm
 DICTIONARY_NAME = "DICT_4X4_50"  # 手冊只說 4x4，ID 1 到 12；50 是最小的 4x4 字典
 

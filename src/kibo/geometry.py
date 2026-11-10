@@ -10,7 +10,7 @@ ROS 的 tf 又要在節點裡才能用。這裡只需要幾個很小的運算，
 """
 
 import math
-from typing import Tuple
+from typing import NamedTuple, Optional, Tuple
 
 Vec3 = Tuple[float, float, float]
 Quat = Tuple[float, float, float, float]
@@ -18,6 +18,14 @@ Quat = Tuple[float, float, float, float]
 IDENTITY_QUAT: Quat = (0.0, 0.0, 0.0, 1.0)
 FORWARD: Vec3 = (1.0, 0.0, 0.0)
 UP: Vec3 = (0.0, 0.0, 1.0)
+
+
+class Pose(NamedTuple):
+    """位置加姿態。`stamp` 是這筆資料的時間（秒）；沒有時間概念的地方（場地資料、目標）不填。"""
+
+    position: Vec3
+    orientation: Quat
+    stamp: Optional[float] = None  # 導航資料的時間戳；用來分辨是不是同一筆資料
 
 
 def sub(a: Vec3, b: Vec3) -> Vec3:
@@ -90,6 +98,13 @@ def quat_normalize(q: Quat) -> Quat:
     if n == 0.0:
         raise ValueError("cannot normalize a zero quaternion")
     return (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
+
+
+def axis_angle_quat(axis: Vec3, degrees: float) -> Quat:
+    """繞單位軸 axis 轉 degrees 度的四元數。右乘到某個姿態上，就是繞那個姿態的機體軸轉。"""
+    half = math.radians(degrees) / 2.0
+    s = math.sin(half)
+    return (axis[0] * s, axis[1] * s, axis[2] * s, math.cos(half))
 
 
 def rotate(q: Quat, v: Vec3) -> Vec3:

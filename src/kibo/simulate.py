@@ -10,9 +10,9 @@ import argparse
 import sys
 from typing import List, Tuple
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from kibo.fake_robot import CAMERA_FIX_MAX_M, FakeRobot, FakeRobotConfig, fake_config
 from kibo.mission import DEFAULT_MISSION, MissionConfig, MissionReport, run_mission
-from kibo.scenarios import random_checkpoints_message
+from kibo.scenarios import random_checkpoints_message, valid_count
 
 
 def run_once(
@@ -38,19 +38,15 @@ def main(argv: List[str]) -> int:
     args = parser.parse_args(argv)
     if args.runs < 1:
         parser.error("--runs must be at least 1")
-    if not 2 <= args.checkpoints <= 12:
+    if not valid_count(args.checkpoints):
         parser.error("--checkpoints must be between 2 and 12")
 
-    base = FakeRobotConfig()
-    robot_cfg = base._replace(
-        position_noise_m=args.noise,
-        move_fail_prob=args.fail,
-        speeds=base.speeds._replace(slowdown=args.slowdown),
-        camera=args.camera,
-    )
+    robot_cfg = fake_config(args.noise, args.fail, args.slowdown, args.camera)
     scores = []
     for i in range(args.runs):
-        mission_cfg = DEFAULT_MISSION._replace(camera_fix_max_m=0.3 if args.camera else 0.0)
+        mission_cfg = DEFAULT_MISSION._replace(
+            camera_fix_max_m=CAMERA_FIX_MAX_M if args.camera else 0.0
+        )
         robot, report = run_once(args.seed + i, args.checkpoints, robot_cfg, mission_cfg)
         score = robot.score()
         scores.append(score)
