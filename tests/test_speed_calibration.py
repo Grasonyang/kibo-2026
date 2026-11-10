@@ -30,7 +30,9 @@ def test_half_speed_robot_reaches_goal_far_more_often_with_calibration():
     goals_off, score_off, _ = fleet(2.0, WITHOUT)
     goals_on, score_on, calibrated = fleet(2.0, DEFAULT_MISSION)
     assert goals_on - goals_off >= 3
-    assert score_on > score_off * 2.0
+    # 沒校正的那一邊到不了 Goal，但移動的逾時不越過時限，仍然準時送出完成回報、保住已通過的點；
+    # 所以差距不是「有分對 0 分」，而是多了 Goal 與更多的點。
+    assert score_on > score_off * 1.5
     assert calibrated == 6
 
 
@@ -58,11 +60,19 @@ def test_calibration_is_capped_at_twice_the_model():
     assert all("x2.00 vs model" in line for line in lines)
 
 
-def test_a_few_seconds_of_overhead_per_move_stay_inside_the_deadband(three_point_message):
-    # 每次移動多花 3 秒（模型沒算到的）：一段腿二十幾秒，慢 15% 左右，在 25% 的死區內，不該校正。
-    robot = FakeRobot(three_point_message, NOISY._replace(move_overhead_sec=3.0))
+def test_a_second_of_overhead_per_move_stays_inside_the_deadband(three_point_message):
+    # 每次移動多花 1 秒（模型沒算到的）：一段腿二十幾秒，慢 5% 左右，在 11% 的死區內，不該校正。
+    robot = FakeRobot(three_point_message, NOISY._replace(move_overhead_sec=1.0))
     run_mission(robot, DEFAULT_MISSION)
     assert not any("speed calibrated" in line for line in robot.logs)
+
+
+def test_fifteen_percent_slower_is_outside_the_deadband():
+    # 慢 15% 以前落在死區裡（慢 25% 才校正），現在要校正：這是新門檻（慢 11%）的依據。
+    quiet = FakeRobotConfig(position_noise_m=0.01, speeds=Speeds(slowdown=1.15))
+    robot = FakeRobot(random_checkpoints_message(8, 3), quiet, 3)
+    run_mission(robot, DEFAULT_MISSION)
+    assert any("speed calibrated" in line and "x1.15" in line for line in robot.logs)
 
 
 def test_long_leg_gets_a_longer_timeout(three_point_message):

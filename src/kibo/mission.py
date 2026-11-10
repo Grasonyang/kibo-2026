@@ -110,7 +110,10 @@ class MissionConfig(NamedTuple):
     )
     calibrate_speed: bool = True  # 用實測的移動秒數修正時間預算（只往慢的方向）
     min_speed_ratio: float = 0.5  # 校正的上限：最多當作比模型慢 1/0.5 = 2 倍
-    calibrate_below_ratio: float = 0.8  # 死區：實測在模型的 1/0.8 = 1.25 倍以內不校正
+    # 死區：實測在模型的 1/0.9 = 1.11 倍以內不校正。原本是 1.25 倍；慢 20% 到 24% 落在裡面完全不修，
+    # 15 秒的保險被吃光（council sim-bringup-review 的 S1）。模型在模擬器上每段腿只差一兩秒
+    # （docs/kibo/motion-model.md 的各場實測）。
+    calibrate_below_ratio: float = 0.9
     calibrate_min_leg_m: float = 0.5  # 只用這麼長以上的腿校正
     # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
     notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
@@ -119,6 +122,11 @@ class MissionConfig(NamedTuple):
     # 以下兩欄不是探針；排在後面只因為欄位順序是介面的一部分，不隨意更動。
     calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
     log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
+    # 收尾保留：完成回報晚於時限可能整場沒分，所以到點後的等待最晚只等到時限前 finish_reserve_sec
+    # （之後還要回報這一點、送完成回報）；移動的逾時再早 cancel_reserve_sec（逾時後取消 action
+    # 最多等這麼久，對應 ros/user_node.py 的 CANCEL_WAIT_SEC）。
+    finish_reserve_sec: float = 3.0
+    cancel_reserve_sec: float = 5.0
 
     @property
     def probes_on(self) -> bool:
@@ -129,6 +137,9 @@ class MissionConfig(NamedTuple):
 
 
 DEFAULT_MISSION = MissionConfig()
+
+# 逾時比這個還短的移動不送：一定來不及，只會多花一次取消的時間。
+MIN_MOVE_TIMEOUT_SEC = 1.0
 
 
 class Settled(NamedTuple):
@@ -174,6 +185,7 @@ class _Run:
         self.last_pose: Optional[Pose] = None
         self.speeds: Speeds = config.budget.speeds  # 會被實測往慢的方向修
         self.reserved_sec = 0.0  # 目前這一點之後還要飛多久（_fly 每一點更新）
+        self.stops: List[float] = []  # 每一點實際停留的秒數（到點到回報完），見 stop_sec
         self.predicted_sec = 0.0  # 長腿的模型預測秒數累積
         self.actual_sec = 0.0  # 同一批腿的實際秒數累積
 
@@ -188,12 +200,15 @@ class _Run:
         self.robot.log("[t=%.1f %6.1fs left] %s" % (self.robot.now(), self.remaining(), message))
 
     def current_pose(self) -> Optional[Pose]:
-        """幾次都讀不到導航資料就回 None；呼叫端自己決定怎麼辦，不假裝知道位置。"""
+        """幾次都讀不到導航資料就回 None；呼叫端自己決定怎麼辦，不假裝知道位置。
+        已經進到時限前的收尾保留就只讀一次，不等。"""
         for _ in range(self.cfg.pose_attempts):
             pose = self.robot.pose()
             if pose is not None:
                 self.last_pose = pose
                 return pose
+            if self.remaining() < self.cfg.finish_reserve_sec:
+                break
             self.robot.sleep(self.cfg.settle_interval_sec)
         self.log("no navigation data")
         return None
@@ -211,8 +226,23 @@ class _Run:
                 self.robot.sleep(self.cfg.checkpoints_retry_sec)
         return None
 
+    def stop_sec(self) -> float:
+        """規劃時每一點要留幾秒停留：設定值，或最近三點實際停留秒數的中位數，取大的。
+
+        到點一直不穩時，一點會花到十幾秒（等到逾時、再移動一次、再等）；預算若還照 1 秒估，
+        後面的點會排得太滿，最後擠掉 Goal。不會比設定值小，但會跟著最近三點升降
+        （council 的裁決原文是「只增不減」；照字面做的話，一次離群值會拖累整場，見 issue #16）。
+
+        用中位數而不是平均：只有一點特別久（第一次通知卡了幾秒、某一點剛好不穩）不該讓之後
+        每一點都多留那麼久，那會白白刪掉來得及的點；連續兩點都久才採用。還沒有三點時，
+        缺的用設定值補。"""
+        planned = self.cfg.budget.settle_sec
+        recent = sorted(([planned, planned] + self.stops)[-3:])
+        return max(planned, recent[1])
+
     def slack(self) -> float:
-        """這一點還能多花幾秒：剩餘時間扣掉後面的路線需要的秒數。
+        """這一點還能多花幾秒：剩餘時間扣掉後面的路線需要的秒數（reserved_sec，_fly 每一點更新）。
+        保險（budget.margin_sec）不在裡面：等待可以把它花掉，之後靠重新規劃刪點補回來。
 
         用「剩餘時間」的絕對值來判斷趕不趕是錯的：到 Goal 時剩 26 秒其實很充裕（後面沒事了），
         中途剩 100 秒卻可能已經落後。"""
@@ -221,8 +251,12 @@ class _Run:
     def required_level(self) -> int:
         return 1 if self.slack() < self.cfg.hurry_sec else self.cfg.target_level
 
-    def move_timeout(self, target: Optional[Pose] = None) -> float:
-        """至少 move_timeout_sec，長腿放大到估計秒數的三倍；不超過剩餘時間，但最少 5 秒。
+    def move_timeout(
+        self, target: Optional[Pose] = None, limit_sec: Optional[float] = None
+    ) -> float:
+        """一般是 move_timeout_sec，長腿放大到估計秒數的三倍；不超過 limit_sec，
+        也不越過時限前的收尾保留（逾時後還要取消、回報、送完成回報）。回傳值可能很小甚至是負的：
+        代表已經沒有時間移動，由呼叫端決定不送。
 
         三倍：校正最多只認「慢 2 倍」，逾時要比那更寬，否則慢 2 倍多的機器人
         每段長腿都會被自己取消。"""
@@ -236,7 +270,11 @@ class _Run:
                 self.speeds,
             )
             timeout = max(timeout, 3.0 * estimate)
-        return max(5.0, min(timeout, self.remaining()))
+        reserve = self.cfg.finish_reserve_sec + self.cfg.cancel_reserve_sec
+        timeout = min(timeout, self.remaining() - reserve)
+        if limit_sec is not None:
+            timeout = min(timeout, limit_sec)
+        return timeout
 
     def record_leg(
         self, start: Optional[Pose], target: Pose, seconds: float, timed_out: bool = False
@@ -295,8 +333,9 @@ class _Run:
             top_level=TOP_LEVEL,
         )
 
-    def settle(self, cp: Checkpoint) -> Settled:
+    def settle(self, cp: Checkpoint, wait: bool = True) -> Settled:
         """等到在容差內連續待滿 1 秒（stable=True），或逾時（回傳最後一次判定）。
+        `wait=False` 只讀一筆不等：移動沒成功的點不會回報，等它穩定是白花時間。
 
         「連續待滿」怎麼算在 kibo.settle；這裡只負責拿姿態、看時鐘、決定要求幾級。
         先看移動尾段留下的導航紀錄：夠格就不用再等。否則每 settle_interval_sec 讀一筆，
@@ -311,11 +350,17 @@ class _Run:
         if watch.tail_report:
             self.log("tail of the move not usable: " + watch.tail_report)
 
-        deadline = self.robot.now() + self.cfg.settle_timeout_sec
+        # 最多等 settle_timeout_sec，而且不超過這一點的餘裕（等待不能花掉後面路線要用的時間），
+        # 也不越過時限前的收尾保留（到 Goal 時餘裕就是剩餘時間，不能等到見底）。
+        # 沒得等的時候仍然讀一筆：那一筆不算穩定，但有判定才能決定要不要回報。
+        spare = min(self.slack(), self.remaining() - self.cfg.finish_reserve_sec)
+        if not wait:
+            spare = 0.0
+        deadline = self.robot.now() + min(self.cfg.settle_timeout_sec, max(0.0, spare))
         strict_until = self.robot.now() + self.cfg.settle_strict_sec
         max_samples = int(self.cfg.settle_timeout_sec / self.cfg.settle_interval_sec) + 2
         for _ in range(max_samples):
-            if self.robot.now() > deadline or self.robot.stop_requested():
+            if self.robot.stop_requested():
                 break
             pose = self.current_pose()
             if pose is None:
@@ -324,23 +369,34 @@ class _Run:
             judgement = watch.feed(pose, self.required_level(), strict)
             if judgement is not None and watch.stable:
                 return Settled(judgement, True)
+            if self.robot.now() + self.cfg.settle_interval_sec > deadline:
+                break
             self.robot.sleep(self.cfg.settle_interval_sec)
         return Settled(watch.last, False)
 
-    def move(self, cp: Checkpoint, attempts: int) -> bool:
+    def move(self, cp: Checkpoint, attempts: int, limit_sec: Optional[float] = None) -> bool:
+        """移動到 cp，最多試 attempts 次；沒有時間了就不送（含重試）。
+
+        `limit_sec` 是每次移動額外的時間上限，只有修正用的再移動才給。再移動的腿不拿來校正速度：
+        它的起點是一筆沒穩定的讀數，算出來的預測秒數不可信。"""
         target = Pose(cp.position, target_attitude(cp))
         for attempt in range(attempts):
             if self.robot.stop_requested():
                 return False
+            timeout = self.move_timeout(target, limit_sec)
+            if timeout < MIN_MOVE_TIMEOUT_SEC:
+                self.log("no time left to move to #%d" % cp.id)
+                return False
             start, started_at = self.last_pose, self.robot.now()
-            result = self.robot.move_to(target, self.move_timeout(target))
+            result = self.robot.move_to(target, timeout)
             self.log("move to #%d attempt %d: %s" % (cp.id, attempt + 1, result))
             elapsed = self.robot.now() - started_at
+            evidence = attempt == 0 and limit_sec is None  # 重試時起點已經不是 last_pose
             if result == MOVE_SUCCESS:
-                if attempt == 0:  # 重試時起點已經不是 last_pose，這段腿不拿來校正
+                if evidence:
                     self.record_leg(start, target, elapsed)
                 return True
-            if result == MOVE_TIMEOUT and attempt == 0:
+            if result == MOVE_TIMEOUT and evidence:
                 self.record_leg(start, target, elapsed, timed_out=True)
             if result == MOVE_INVALID:
                 return False  # 再試也不會變合法
@@ -384,7 +440,10 @@ class _Run:
         if norm(delta) > self.cfg.camera_fix_max_m:
             self.log("camera correction %.2fm too large, ignoring" % norm(delta))
             return False
-        result = self.robot.move_relative(delta, self.move_timeout())
+        timeout = self.move_timeout(limit_sec=self.slack() - self.cfg.hurry_sec)
+        if timeout < MIN_MOVE_TIMEOUT_SEC:
+            return False
+        result = self.robot.move_relative(delta, timeout)
         self.log(
             "camera correction (%.3f, %.3f, %.3f): %s" % (delta[0], delta[1], delta[2], result)
         )
@@ -424,11 +483,13 @@ class _Run:
 
     def visit(self, cp: Checkpoint) -> Visit:
         moved = self.move(cp, self.cfg.max_move_attempts)
-        settled = self.settle(cp)
+        arrived_at = self.robot.now()
+        settled = self.settle(cp, wait=moved or self.cfg.notify_even_if_level0)
         self.log(self.describe(cp, settled))
         if not settled.stable and moved and self.slack() > self.cfg.refine_sec:
             # 再修正一次通常就夠了；只做一次，不無限修正。有相機就用相機，沒有就再絕對移動一次。
-            if self.camera_fix(cp) or self.move(cp, 1):
+            # 再移動的時間上限是餘裕扣掉 hurry_sec：修正不能把後面路線要用的時間花掉。
+            if self.camera_fix(cp) or self.move(cp, 1, self.slack() - self.cfg.hurry_sec):
                 settled = self.settle(cp)
                 self.log("refined: " + self.describe(cp, settled))
         # 穩定達標就回報；沒穩定但最後一次判定至少 Lv1 也回報（伺服器才是裁判，
@@ -437,6 +498,7 @@ class _Run:
         should_notify = (settled.level > 0 and moved) or self.cfg.notify_even_if_level0
         notified = should_notify and self.notify(cp)
         self.log_marker(cp)  # 通知送出之後才做，不拖慢回報
+        self.stops.append(self.robot.now() - arrived_at)
         notified_so_far = sum(1 for v in self.visits if v.notified) + (1 if notified else 0)
         if self.cfg.deliberate_late_after and notified_so_far == self.cfg.deliberate_late_after:
             self.log("PROBE: deliberately waiting past the time limit")
@@ -505,7 +567,7 @@ def _fly(run: _Run) -> Tuple[bool, str]:
             pending,
             cps.goal,
             run.remaining(),
-            config.budget._replace(speeds=run.speeds),
+            config.budget._replace(speeds=run.speeds, settle_sec=run.stop_sec()),
         )
         if plan.dropped:
             run.log("dropping %s to protect the goal" % plan.dropped)
@@ -513,10 +575,13 @@ def _fly(run: _Run) -> Tuple[bool, str]:
             pending = [cp for cp in pending if cp.id not in plan.dropped]
         run.log("route %s (~%.0fs)" % (plan.route.order, plan.estimated_sec))
         target = by_id[plan.route.order[0]]
-        # 這一點之後還要的秒數 = 整條路線的估計，扣掉去這一點的腿與在這一點停留的時間
+        # 這一點之後還要的秒數 = 整條路線的估計，扣掉去這一點的腿與在這一點停留的時間；
+        # 後面還有移動的話，再加上移動必須提早結束的收尾保留（見 move_timeout）。
         run.reserved_sec = max(
-            0.0, plan.estimated_sec - plan.route.legs[0].seconds - config.budget.settle_sec
+            0.0, plan.estimated_sec - plan.route.legs[0].seconds - run.stop_sec()
         )
+        if target.id != cps.goal.id:
+            run.reserved_sec += config.finish_reserve_sec + config.cancel_reserve_sec
         record = run.visit(target)
         if target.id == cps.goal.id:
             goal_reached = record.notified

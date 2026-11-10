@@ -106,6 +106,8 @@ def test_when_there_is_no_time_to_spare_a_lower_level_counts_as_stable(three_poi
     tight = DEFAULT_MISSION._replace(
         time_limit_sec=dry_run.elapsed_sec + 2.0,
         budget=DEFAULT_MISSION.budget._replace(margin_sec=0.0),
+        finish_reserve_sec=0.0,  # 這裡只看餘裕的規則；收尾保留另外在 test_time_safety.py 測
+        cancel_reserve_sec=0.0,
     )
     robot = OffsetRobot(three_point_message, PERFECT)
     report = run_mission(robot, tight)
@@ -310,6 +312,8 @@ def test_when_the_rest_of_the_route_needs_the_time_it_settles_for_less():
     tight = DEFAULT_MISSION._replace(
         time_limit_sec=dry_run.elapsed_sec + 2.0,
         budget=DEFAULT_MISSION.budget._replace(margin_sec=0.0),
+        finish_reserve_sec=0.0,  # 這裡只看餘裕的規則；收尾保留另外在 test_time_safety.py 測
+        cancel_reserve_sec=0.0,
     )
     robot = StillTurningRobot(message, PERFECT)
     report = run_mission(robot, tight)
