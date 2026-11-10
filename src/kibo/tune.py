@@ -33,7 +33,7 @@ def variants() -> List[Variant]:
         Variant("穩定估 0s", base._replace(budget=budget._replace(settle_sec=0.0))),
         Variant("穩定估 4s", base._replace(budget=budget._replace(settle_sec=4.0))),
         Variant("只求 Lv2", base._replace(target_level=2)),
-        Variant("趕時間門檻 90s", base._replace(hurry_sec=90.0)),
+        Variant("趕時間門檻 15s", base._replace(hurry_sec=15.0)),
         Variant("不刪點（只做對照）", base._replace(budget=budget._replace(allow_drop=False))),
     ]
 

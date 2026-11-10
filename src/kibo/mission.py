@@ -98,7 +98,8 @@ class MissionConfig(NamedTuple):
     settle_interval_sec: float = 0.25
     settle_timeout_sec: float = 6.0
     target_level: int = 3
-    hurry_sec: float = 40.0  # 剩餘時間少於這個就不再追求 Lv3
+    hurry_sec: float = 5.0  # 這一點的餘裕（剩餘時間扣掉後面還要飛的）少於這個，就不再追求 Lv3
+    refine_sec: float = 15.0  # 餘裕多於這個，沒穩定時才值得再移動一次去修正
     notify_attempts: int = 2
     checkpoints_attempts: int = 3
     checkpoints_retry_sec: float = 1.0
@@ -168,6 +169,7 @@ class _Run:
         self.dropped: List[int] = []
         self.last_pose: Optional[Pose] = None
         self.speeds: Speeds = config.budget.speeds  # 會被實測往慢的方向修
+        self.reserved_sec = 0.0  # 目前這一點之後還要飛多久（_fly 每一點更新）
         self.predicted_sec = 0.0  # 長腿的模型預測秒數累積
         self.actual_sec = 0.0  # 同一批腿的實際秒數累積
 
@@ -205,8 +207,15 @@ class _Run:
                 self.robot.sleep(self.cfg.checkpoints_retry_sec)
         return None
 
+    def slack(self) -> float:
+        """這一點還能多花幾秒：剩餘時間扣掉後面的路線需要的秒數。
+
+        用「剩餘時間」的絕對值來判斷趕不趕是錯的：到 Goal 時剩 26 秒其實很充裕（後面沒事了），
+        中途剩 100 秒卻可能已經落後。"""
+        return self.remaining() - self.reserved_sec
+
     def required_level(self) -> int:
-        return 1 if self.remaining() < self.cfg.hurry_sec else self.cfg.target_level
+        return 1 if self.slack() < self.cfg.hurry_sec else self.cfg.target_level
 
     def move_timeout(self, target: Optional[Pose] = None) -> float:
         """至少 move_timeout_sec，長腿放大到估計秒數的三倍；不超過剩餘時間，但最少 5 秒。
@@ -433,7 +442,7 @@ class _Run:
         moved = self.move(cp, self.cfg.max_move_attempts)
         settled = self.settle(cp)
         self.log(self.describe(cp, settled))
-        if not settled.stable and moved and self.remaining() > self.cfg.hurry_sec:
+        if not settled.stable and moved and self.slack() > self.cfg.refine_sec:
             # 再修正一次通常就夠了；只做一次，不無限修正。有相機就用相機，沒有就再絕對移動一次。
             if self.camera_fix(cp) or self.move(cp, 1):
                 settled = self.settle(cp)
@@ -519,6 +528,10 @@ def _fly(run: _Run, robot: Robot, config: MissionConfig) -> Tuple[bool, str]:
             pending = [cp for cp in pending if cp.id not in plan.dropped]
         run.log("route %s (~%.0fs)" % (plan.route.order, plan.estimated_sec))
         target = by_id[plan.route.order[0]]
+        # 這一點之後還要的秒數 = 整條路線的估計，扣掉去這一點的腿與在這一點停留的時間
+        run.reserved_sec = max(
+            0.0, plan.estimated_sec - plan.route.legs[0].seconds - config.budget.settle_sec
+        )
         record = run.visit(target)
         if target.id == cps.goal.id:
             goal_reached = record.notified

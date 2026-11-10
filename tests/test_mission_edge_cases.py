@@ -106,12 +106,18 @@ def test_outside_every_margin_is_not_reported(three_point_message):
     assert all(not v.notified for v in report.visits)
 
 
-def test_when_hurrying_level_1_counts_as_stable(three_point_message):
+def test_when_there_is_no_time_to_spare_a_lower_level_counts_as_stable(three_point_message):
+    # 時間剛好夠飛完：每一點都偏 15 cm（Lv2），沒有餘裕等或修正，直接以 Lv2 回報。
+    dry_run = run_mission(FakeRobot(three_point_message, PERFECT), DEFAULT_MISSION)
+    tight = DEFAULT_MISSION._replace(
+        time_limit_sec=dry_run.elapsed_sec + 2.0,
+        budget=DEFAULT_MISSION.budget._replace(margin_sec=0.0),
+    )
     robot = OffsetRobot(three_point_message, PERFECT)
-    hurried = DEFAULT_MISSION._replace(time_limit_sec=DEFAULT_MISSION.hurry_sec - 1.0)
-    report = run_mission(robot, hurried)
-    assert report.visits[0].stable  # 不趕時間時 Lv2 不算穩定（上一個測試），趕時間就算
+    report = run_mission(robot, tight)
+    assert report.visits[0].stable  # 不趕時間時 Lv2 不算穩定（上一個測試），沒餘裕時就算
     assert report.visits[0].judged_level == 2
+    assert robot.move_calls == 3  # 沒有多花一次移動去修正
 
 
 def test_one_refinement_move_recovers_level_3(three_point_message):
@@ -247,3 +253,74 @@ def test_history_that_was_outside_tolerance_a_second_ago_does_not_count(three_po
     assert robot.recent_calls > 0
     assert all(v.stable and v.notified for v in report.visits)
     assert _seconds_between_arrival_and_report(robot, 1) >= 1.0
+
+
+class StillTurningRobot(FakeRobot):
+    """移動回報成功後的 2 秒內，機體還差 15° 滾轉沒轉完（Lv2），之後才到位。
+
+    真的控制器就是這樣：姿態進到 0.5 rad 以內就回報成功，不等轉完。"""
+
+    turning_until = 0.0
+
+    def move_to(self, target, timeout_sec):
+        result = super().move_to(target, timeout_sec)
+        self.turning_until = self.t + 2.0
+        return result
+
+    def pose(self):
+        pose = super().pose()
+        if pose is not None and self.t < self.turning_until:
+            half = 7.5 * 3.141592653589793 / 180.0
+            from math import cos, sin
+
+            from kibo.geometry import quat_mul
+
+            rolled = quat_mul(pose.orientation, (sin(half), 0.0, 0.0, cos(half)))
+            return Pose(pose.position, rolled, stamp=pose.stamp)
+        return pose
+
+    def notify_checkpoint(self, checkpoint_id):
+        # 假裁判用的是真實姿態；把「還在轉」也反映進去
+        if self.t < self.turning_until:
+            truth, self.true_pose = self.true_pose, self.pose()
+            try:
+                return super().notify_checkpoint(checkpoint_id)
+            finally:
+                self.true_pose = truth
+        return super().notify_checkpoint(checkpoint_id)
+
+
+def _realistic_message():
+    # 共用的三點場景裡，Goal 剛好正對 -X、姿態是整整 180°，官方的滾轉量測在那裡退化成 0
+    # （見 docs/kibo/simulator-internals.md 的 J5）。這兩個測試要看滾轉，所以用產生器的場景。
+    from kibo.scenarios import random_checkpoints_message
+
+    return random_checkpoints_message(3, seed=5)
+
+
+def test_with_time_to_spare_at_the_goal_it_waits_for_level_3():
+    # 2026-11-10 本機 hard 場：到 Goal 時還剩 26 秒，但「剩不到 40 秒就趕」讓它在機體還沒轉完時
+    # 就回報，官方只給 Lv1。到 Goal 之後已經沒有別的事要做，剩下的時間都可以拿來等。
+    message = _realistic_message()
+    dry_run = run_mission(FakeRobot(message, PERFECT), DEFAULT_MISSION)
+    roomy = DEFAULT_MISSION._replace(time_limit_sec=dry_run.elapsed_sec + 30.0)
+    robot = StillTurningRobot(message, PERFECT)
+    report = run_mission(robot, roomy)
+    assert report.visits[-1].checkpoint_id == 12
+    assert [v.judged_level for v in report.visits] == [3, 3, 3]
+    assert robot.passed_levels == [3, 3, 3]
+    assert report.elapsed_sec <= roomy.time_limit_sec
+
+
+def test_when_the_rest_of_the_route_needs_the_time_it_settles_for_less():
+    # 時間只夠剛好飛完：每一點都沒有多餘的秒數可以等，還在轉（Lv2）就回報。
+    message = _realistic_message()
+    dry_run = run_mission(FakeRobot(message, PERFECT), DEFAULT_MISSION)
+    tight = DEFAULT_MISSION._replace(
+        time_limit_sec=dry_run.elapsed_sec + 2.0,
+        budget=DEFAULT_MISSION.budget._replace(margin_sec=0.0),
+    )
+    robot = StillTurningRobot(message, PERFECT)
+    report = run_mission(robot, tight)
+    assert [v.judged_level for v in report.visits] == [2, 2, 2]
+    assert report.elapsed_sec <= tight.time_limit_sec
