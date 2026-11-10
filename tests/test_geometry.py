@@ -9,7 +9,6 @@ from kibo.geometry import (
     forward,
     look_at,
     quat_angle,
-    roll_error,
     rotate,
     sub,
 )
@@ -64,14 +63,6 @@ def test_look_at_keeps_reference_up_when_possible():
 def test_look_at_reproduces_manual_attitude_up_to_roll():
     q = look_at(MANUAL_CP, MANUAL_MARKER, reference=MANUAL_ATTITUDE)
     assert quat_angle(q, MANUAL_ATTITUDE) == pytest.approx(0.0, abs=0.05)
-
-
-def test_roll_error_measures_rotation_about_line_of_sight():
-    assert roll_error(ROLL_30, IDENTITY_QUAT) == pytest.approx(30.0)
-
-
-def test_roll_error_is_zero_for_same_attitude():
-    assert roll_error(MANUAL_ATTITUDE, MANUAL_ATTITUDE) == pytest.approx(0.0)
 
 
 def test_quat_angle_between_identity_and_yaw_90():

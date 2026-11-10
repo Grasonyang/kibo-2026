@@ -19,7 +19,7 @@ from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Vec3, distance, norm
-from kibo.judge import CAMERA_OFFSET, Judgement, Pose, judge, target_attitude
+from kibo.judge import JUDGE_ORIGIN, Judgement, Pose, judge, target_attitude
 from kibo.planner import Speeds, leg_seconds
 from kibo.vision import body_correction, expected_marker_in_body
 
@@ -96,7 +96,7 @@ class MissionConfig(NamedTuple):
     checkpoints_attempts: int = 3
     checkpoints_retry_sec: float = 1.0
     pose_attempts: int = 5
-    camera_offset_m: Vec3 = CAMERA_OFFSET  # 對中用相機位置；伺服器若用機體中心就設成 (0, 0, 0)
+    camera_offset_m: Vec3 = JUDGE_ORIGIN  # 官方 judge.py 的對中從機體中心量；不要改，留著只為對照
     camera_fix_max_m: float = (
         0.0  # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
     )

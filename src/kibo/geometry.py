@@ -142,20 +142,3 @@ def look_at(eye: Vec3, target: Vec3, reference: Quat = IDENTITY_QUAT) -> Quat:
             break
     y_axis = cross(z_axis, x_axis)
     return quat_from_axes(x_axis, y_axis, z_axis)
-
-
-def roll_error(actual: Quat, target: Quat) -> float:
-    """繞視線軸的滾轉差，單位是度，恆為正。
-
-    兩個姿態的「上」向量都投影到與 actual 視線垂直的平面，再量夾角。
-    這正是規則書 2.3.1 第 ③ 項：「繞相機視線軸的姿態」。
-    """
-    axis = forward(actual)
-    projected = []
-    for q in (actual, target):
-        up = rotate(q, UP)
-        p = sub(up, scale(axis, dot(up, axis)))
-        if norm(p) < 1e-9:
-            return 0.0
-        projected.append(p)
-    return angle_between(projected[0], projected[1])
