@@ -5,6 +5,7 @@
 （沒降頻時 64 筆只跨 0.33 秒，「到點前最後 1 秒」根本湊不滿）。
 
 - `add` 每一筆都呼叫，便宜：大部分只更新「最新一筆」，隔 `step_sec` 才進紀錄。
+  假設資料大致照時間順序來；晚到的丟掉，時間倒退超過 `fresh_sec` 當作時鐘重設。
 - `latest` 是最新一筆，比 `fresh_sec` 舊就回 None（不假裝知道位置）。
 - `recent` 是紀錄裡最近幾秒的姿態，舊的在前。
 時間一律用導航資料自己的 stamp，與呼叫端給的 `now` 比。
@@ -29,22 +30,28 @@ class NavLog(object):
         self._count = 0
 
     def add(self, pose: Pose) -> None:
-        """收進一筆。沒有 stamp 的不收；時間倒退（時鐘重設）就把舊紀錄清掉重來。"""
+        """收進一筆。沒有 stamp 的不收。
+
+        比紀錄裡最新一筆還舊的資料有兩種：只是晚到一點（丟掉，不能蓋掉比較新的那筆，
+        也不能因此把紀錄清空），或是時鐘重設了（舊到超過 fresh_sec；紀錄清掉重來）。"""
         stamp = pose.stamp
         if stamp is None:
             return
         with self._lock:
-            newest = self._kept[-1].stamp if self._kept else None
-            if newest is not None and stamp < newest:
+            last = self._latest.stamp if self._latest is not None else None
+            if last is not None and stamp < last:
+                if last - stamp <= self._fresh_sec:
+                    return
                 self._kept.clear()
                 self._first_stamp = None
                 self._count = 0
-                newest = None
+            newest = self._kept[-1].stamp if self._kept else None
             self._latest = pose
             self._count += 1
             if self._first_stamp is None:
                 self._first_stamp = stamp
-            if newest is None or stamp - newest >= self._step_sec:
+            # 1e-9：剛好隔一個 step 的資料，浮點相減可能是 0.04999…，不能因此丟掉
+            if newest is None or stamp - newest >= self._step_sec - 1e-9:
                 self._kept.append(pose)
 
     def latest(self, now: float) -> Optional[Pose]:

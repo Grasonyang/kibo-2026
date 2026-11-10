@@ -10,10 +10,11 @@ import random
 from typing import List, NamedTuple, Optional
 
 from kibo.checkpoints import CheckpointSet, parse_checkpoints
+from kibo.ctl_result import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT
 from kibo.field import START_POSE
 from kibo.geometry import Pose, Quat, Vec3, add, axis_angle_quat, normalize, quat_mul, rotate
 from kibo.judge import judge
-from kibo.mission import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT, Robot
+from kibo.mission import Robot
 from kibo.motion import Speeds, leg_seconds
 from kibo.navlog import NavLog
 from kibo.scoring import DEFAULT_SCORING, Scoring
@@ -39,6 +40,24 @@ class FakeRobotConfig(NamedTuple):
 
 
 DEFAULT_FAKE = FakeRobotConfig()
+
+# 本機「資格賽」（simulate、tune）用的數字，兩邊共用：
+CAMERA_FIX_MAX_M = 0.3  # 開相機修正的實驗時，修正量的上限（公尺）
+MEASURED_SETTLED_BEFORE_RETURN_SEC = 1.5  # 模擬器實測：action 回報成功前已經停了約 1.5 秒
+
+
+def fake_config(
+    noise_m: float, fail_prob: float, slowdown: float, camera: bool = False
+) -> FakeRobotConfig:
+    """命令列參數 -> 假機器人的設定；其餘用實測值。"""
+    base = FakeRobotConfig()
+    return base._replace(
+        position_noise_m=noise_m,
+        move_fail_prob=fail_prob,
+        speeds=base.speeds._replace(slowdown=slowdown),
+        settled_before_return_sec=MEASURED_SETTLED_BEFORE_RETURN_SEC,
+        camera=camera,
+    )
 
 
 def _random_rotation(rng: random.Random, sigma_deg: float) -> Quat:

@@ -54,6 +54,7 @@ from kibo.ctl_result import (
     ACTION_DONE,
     ACTION_STOPPED,
     ACTION_TIMEOUT,
+    MOVE_ABORTED,
     RESULT_CODES,
     mismatched_codes,
     move_outcome,
@@ -61,7 +62,6 @@ from kibo.ctl_result import (
 from kibo.geometry import Pose
 from kibo.mission import (
     DEFAULT_MISSION,
-    MOVE_ABORTED,
     Robot,
     run_mission,
 )
@@ -367,17 +367,17 @@ class RosRobot(Robot):
             self._navlog.count,
             self._navlog.rate_hz(),
         )
-        header, pose = self._nav_header, self._navlog.latest(rospy.get_time())
-        if header is not None and pose is not None:
+        header = self._nav_header
+        if header is not None:
+            # age 用 header 算，不經過「太舊就當沒有」的那道門：導航若停了，這裡要看得出停多久。
+            pose = self._navlog.latest(header[1])
             rospy.loginfo(
-                "[survey] nav frame=%s stamp=%.3f age=%.3f status=%s pos=(%.3f, %.3f, %.3f)",
+                "[survey] nav frame=%s stamp=%.3f age=%.3f status=%s pos=%s",
                 header[0],
                 header[1],
                 rospy.get_time() - header[1],
                 header[2],
-                pose.position[0],
-                pose.position[1],
-                pose.position[2],
+                "(%.3f, %.3f, %.3f)" % pose.position if pose is not None else "?",
             )
         else:
             rospy.logwarn("[survey] no navigation message yet")

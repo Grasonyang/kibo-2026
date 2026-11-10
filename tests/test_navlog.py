@@ -57,11 +57,30 @@ def test_capacity_drops_the_oldest():
 
 def test_a_clock_that_jumps_backwards_starts_a_fresh_history():
     # 模擬時鐘重設：舊的紀錄比「現在」還新，留著會讓人以為已經穩定很久。
-    log = NavLog(step_sec=0.05)
+    log = NavLog(step_sec=0.05, fresh_sec=1.0)
     log.add(pose(100.0))
     log.add(pose(100.1))
     log.add(pose(5.0))
     assert stamps(log.recent(now=5.0, seconds=10.0)) == [5.0]
+
+
+def test_a_sample_that_arrives_slightly_late_is_dropped_not_treated_as_a_clock_reset():
+    # 晚到 40 ms 的一筆不能把整本紀錄清掉（那會讓尾段湊不滿 1 秒），也不能蓋掉比較新的那筆。
+    log = NavLog(step_sec=0.05, fresh_sec=1.0)
+    for i in range(21):
+        log.add(pose(10.0 + 0.05 * i, x=float(i)))
+    log.add(pose(10.96, x=99.0))
+    assert len(log.recent(now=11.0, seconds=10.0)) == 21
+    latest = log.latest(now=11.0)
+    assert latest is not None and latest.position[0] == 20.0
+
+
+def test_samples_exactly_one_step_apart_are_all_kept():
+    # 0.05 的倍數用浮點加起來會差一點點；不能因此每隔一筆丟一筆。
+    log = NavLog(step_sec=0.05)
+    for i in range(21):
+        log.add(pose(51.5 - 0.05 * (20 - i)))
+    assert len(log.recent(now=51.5, seconds=10.0)) == 21
 
 
 def test_samples_without_a_stamp_are_ignored():

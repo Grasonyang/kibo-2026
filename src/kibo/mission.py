@@ -16,10 +16,11 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
-from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
+from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints, target_attitude
+from kibo.ctl_result import MOVE_INVALID, MOVE_SUCCESS, MOVE_TIMEOUT
 from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose, Vec3, distance, norm, quat_angle
-from kibo.judge import Judgement, target_attitude
+from kibo.judge import Judgement
 from kibo.motion import Speeds, leg_seconds
 from kibo.settle import SettleRule, Steadiness
 from kibo.vision import body_correction, expected_marker_in_body
@@ -27,11 +28,6 @@ from kibo.vision import body_correction, expected_marker_in_body
 ABORT_STOP = "stop requested"
 
 TOP_LEVEL = 3  # 最高的通過等級；notify_margin 的緩衝只在追求這一級時才有意義
-
-MOVE_SUCCESS = "success"
-MOVE_TIMEOUT = "timeout"
-MOVE_ABORTED = "aborted"
-MOVE_INVALID = "invalid"
 
 
 class Robot(ABC):
@@ -47,7 +43,7 @@ class Robot(ABC):
 
     @abstractmethod
     def move_to(self, target: Pose, timeout_sec: float) -> str:
-        """絕對移動，回傳 MOVE_* 其中之一。"""
+        """絕對移動，回傳 kibo.ctl_result 的 MOVE_* 其中之一。"""
 
     @abstractmethod
     def sleep(self, sec: float) -> None:
@@ -116,12 +112,13 @@ class MissionConfig(NamedTuple):
     min_speed_ratio: float = 0.5  # 校正的上限：最多當作比模型慢 1/0.5 = 2 倍
     calibrate_below_ratio: float = 0.8  # 死區：實測在模型的 1/0.8 = 1.25 倍以內不校正
     calibrate_min_leg_m: float = 0.5  # 只用這麼長以上的腿校正
-    calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
-    log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
     # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
     notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
     skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
     deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
+    # 以下兩欄不是探針；排在後面只因為欄位順序是介面的一部分，不隨意更動。
+    calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
+    log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
 
     @property
     def probes_on(self) -> bool:
@@ -303,13 +300,13 @@ class _Run:
 
         「連續待滿」怎麼算在 kibo.settle；這裡只負責拿姿態、看時鐘、決定要求幾級。
         先看移動尾段留下的導航紀錄：夠格就不用再等。否則每 settle_interval_sec 讀一筆，
-        前 settle_strict_sec 秒用較嚴的標準（離 Lv3 上限留兩成），之後照一般標準。
+        前 settle_strict_sec 秒用較嚴的標準（離 Lv3 上限留 notify_margin 的緩衝），之後照一般標準。
         """
         rule = self.settle_rule()
         watch = Steadiness(cp, rule)
         tail = self.robot.recent_poses(rule.window_sec + self.cfg.settle_interval_sec)
         if watch.feed_tail(tail, self.robot.now(), self.required_level()):
-            self.last_pose = tail[-1]
+            self.last_pose = watch.last_pose
             return Settled(watch.last, True)
         if watch.tail_report:
             self.log("tail of the move not usable: " + watch.tail_report)

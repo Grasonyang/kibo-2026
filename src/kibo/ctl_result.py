@@ -6,7 +6,11 @@
 
 from typing import Dict, List, Mapping, Optional
 
-from kibo.mission import MOVE_ABORTED, MOVE_INVALID, MOVE_SUCCESS, MOVE_TIMEOUT
+# 任務邏輯看到的四種移動結果（Robot.move_to 的回傳值）
+MOVE_SUCCESS = "success"
+MOVE_TIMEOUT = "timeout"  # 逾時：值得再試，也代表機器人比預期慢
+MOVE_ABORTED = "aborted"  # 被中止或失敗：值得再試
+MOVE_INVALID = "invalid"  # 指令或導航不合法：再送一次也不會變合法
 
 # 我們自己等 action 的結局
 ACTION_DONE = "done"  # action 結束了（成功、失敗或被拒絕）

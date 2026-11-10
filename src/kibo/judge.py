@@ -23,7 +23,6 @@ from kibo.geometry import (
     angle_between,
     distance,
     forward,
-    look_at,
     norm,
     quat_normalize,
     scale,
@@ -86,20 +85,6 @@ def official_roll_error(actual: Quat, target: Quat, view: Vec3) -> float:
     axis = scale(view, 1.0 / length)
     diff = twist_angle(actual, axis) - twist_angle(target, axis)
     return abs((diff + 180.0) % 360.0 - 180.0)
-
-
-def target_attitude(checkpoint: Checkpoint) -> Quat:
-    """要用哪個姿態去 CheckPoint。
-
-    正常用伺服器給的 attitude（官方產生器保證它從 CheckPoint 位置正對 marker）。保險：
-    若那個姿態的對中角超過最嚴的餘裕，就自己算一個「正對 marker、滾轉盡量貼近伺服器姿態」的。
-    """
-    to_marker = sub(checkpoint.marker_position, checkpoint.position)
-    centering = angle_between(forward(checkpoint.attitude), to_marker)
-    strictest = checkpoint.centering_bands[0].limit if checkpoint.centering_bands else 180.0
-    if centering <= strictest:
-        return checkpoint.attitude
-    return look_at(checkpoint.position, checkpoint.marker_position, reference=checkpoint.attitude)
 
 
 def judge(pose: Pose, checkpoint: Checkpoint) -> Judgement:

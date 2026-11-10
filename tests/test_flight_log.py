@@ -2,10 +2,11 @@
 log 裡有每段腿的距離與秒數、探針旗標預設全關、報表工具認得 log 的格式。"""
 
 from conftest import PERFECT
+from kibo.ctl_result import MOVE_INVALID
 from kibo.fake_robot import FakeRobot
 from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose
-from kibo.mission import DEFAULT_MISSION, MOVE_INVALID, run_mission
+from kibo.mission import DEFAULT_MISSION, run_mission
 
 
 class StaleNavRobot(FakeRobot):

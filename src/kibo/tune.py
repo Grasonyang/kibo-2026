@@ -11,11 +11,10 @@ import argparse
 import sys
 from typing import Dict, List, NamedTuple, Tuple
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from kibo.fake_robot import CAMERA_FIX_MAX_M, FakeRobot, FakeRobotConfig, fake_config
 from kibo.mission import DEFAULT_MISSION, MissionConfig, run_mission
-from kibo.scenarios import random_checkpoints_message
+from kibo.scenarios import random_checkpoints_message, valid_count
 from kibo.scoring import WORLD_NAMES, WORLDS
-from kibo.simulate import CAMERA_FIX_MAX_M
 
 
 class Variant(NamedTuple):
@@ -88,16 +87,10 @@ def main(argv: List[str]) -> int:
     args = parser.parse_args(argv)
     if args.runs < 1:
         parser.error("--runs must be at least 1")
-    if not 2 <= args.checkpoints <= 12:
+    if not valid_count(args.checkpoints):
         parser.error("--checkpoints must be between 2 and 12")
 
-    base = FakeRobotConfig()
-    robot_cfg = base._replace(
-        position_noise_m=args.noise,
-        move_fail_prob=args.fail,
-        speeds=base.speeds._replace(slowdown=args.slowdown),
-        settled_before_return_sec=1.5,  # 模擬器實測：回報成功前已經停了約 1.5 秒
-    )
+    robot_cfg = fake_config(args.noise, args.fail, args.slowdown)
     print(
         "%d 場、%d 點、誤差 %.2fm、失敗率 %.0f%%、比模型慢 %.2f 倍"
         % (args.runs, args.checkpoints, args.noise, args.fail * 100, args.slowdown)

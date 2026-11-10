@@ -6,6 +6,10 @@ from kibo.ctl_result import (
     ACTION_DONE,
     ACTION_STOPPED,
     ACTION_TIMEOUT,
+    MOVE_ABORTED,
+    MOVE_INVALID,
+    MOVE_SUCCESS,
+    MOVE_TIMEOUT,
     TERMINATE_ABORTED,
     TERMINATE_INVALID_CMD,
     TERMINATE_INVALID_NAV,
@@ -14,7 +18,6 @@ from kibo.ctl_result import (
     mismatched_codes,
     move_outcome,
 )
-from kibo.mission import MOVE_ABORTED, MOVE_INVALID, MOVE_SUCCESS, MOVE_TIMEOUT
 
 
 @pytest.mark.parametrize(

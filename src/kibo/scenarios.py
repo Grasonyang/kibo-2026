@@ -90,10 +90,18 @@ def checkpoint_from_marker(marker: Marker, rng: random.Random) -> Dict:
     }
 
 
+MIN_COUNT = 2  # Goal 加至少一個中途點
+
+
+def valid_count(count: int) -> bool:
+    """一場的 CheckPoint 總數（含 Goal）合不合理。"""
+    return MIN_COUNT <= count <= len(MARKERS)
+
+
 def random_checkpoints_message(count: int, seed: int = 0) -> str:
     """count 包含 Goal；官方四個難度是 6、8、10、12（`LEVEL_COUNTS`）。回傳的清單照 id 排序。"""
-    if not 2 <= count <= len(MARKERS):
-        raise ValueError("count must be between 2 and %d" % len(MARKERS))
+    if not valid_count(count):
+        raise ValueError("count must be between %d and %d" % (MIN_COUNT, len(MARKERS)))
     rng = random.Random(seed)
     others = [m for m in MARKERS.values() if m.id != GOAL_MARKER_ID]
     chosen: List[Marker] = rng.sample(others, count - 1) + [MARKERS[GOAL_MARKER_ID]]

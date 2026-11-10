@@ -82,13 +82,13 @@ def test_value_exactly_on_a_band_limit_gets_that_level():
 
 
 def test_target_attitude_keeps_server_attitude_when_it_points_at_marker(cp1):
-    from kibo.judge import target_attitude
+    from kibo.checkpoints import target_attitude
 
     assert target_attitude(cp1) == cp1.attitude
 
 
 def test_target_attitude_falls_back_to_look_at_when_server_attitude_is_off(cp1):
-    from kibo.judge import target_attitude
+    from kibo.checkpoints import target_attitude
 
     pointing_away = quat_mul(cp1.attitude, axis_angle_quat((0.0, 0.0, 1.0), 90.0))
     broken = cp1._replace(attitude=pointing_away)

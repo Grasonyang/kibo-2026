@@ -10,7 +10,7 @@ from kibo.checkpoints import parse_checkpoints
 from kibo.geometry import FORWARD, Pose, axis_angle_quat, quat_mul
 from kibo.settle import SettleRule, Steadiness
 
-RULE = SettleRule(samples=5, window_sec=1.0, max_age_sec=0.25, notify_margin=0.8)
+RULE = SettleRule(samples=5, window_sec=1.0, max_age_sec=0.25, notify_margin=0.8, top_level=3)
 
 
 @pytest.fixture
@@ -52,11 +52,20 @@ def test_the_same_navigation_sample_read_twice_counts_once(cp1):
     assert watch.feed(rolled(cp1, 0.0, 3.0), 3, False) is None  # 重複的那筆沒有被判定
 
 
-def test_many_good_samples_packed_into_less_than_a_second_are_not_enough(cp1):
-    # 20 Hz 的紀錄：筆數早就夠了，但頭尾還不到 1 秒。
+def test_live_readings_are_counted_not_timed(cp1):
+    # 即時讀數只數筆數：每筆之間任務邏輯會等一個取樣間隔，5 筆大約就是 1 秒。
+    # 不另外檢查時間戳的跨度：時間戳有幾毫秒的抖動，卡「剛好 1.000 秒」會平白多等，
+    # 極端時等到逾時（整理時試過，審查用隨機輸入找到反例）。
     watch = Steadiness(cp1, RULE)
-    result = feed(watch, cp1, [(0.05 * i, 0.0) for i in range(21)])
-    assert result[:20] == [False] * 20 and result[20] is True
+    readings = [(0.0, 0.0), (0.249, 0.0), (0.498, 0.0), (0.748, 0.0), (0.998, 0.0)]
+    assert feed(watch, cp1, readings) == [False, False, False, False, True]
+
+
+def test_lowering_the_required_level_midway_keeps_the_count_so_far(cp1):
+    # 等到一半時間變緊、要求從 Lv3 降到 Lv1：之前達標的筆數照算，不回頭重評。
+    watch = Steadiness(cp1, RULE)
+    assert feed(watch, cp1, [(0.0, 0.0), (0.25, 0.0), (0.5, 0.0)], required=3) == [False] * 3
+    assert feed(watch, cp1, [(0.75, 15.0), (1.0, 15.0)], required=1) == [False, True]
 
 
 def test_strict_asks_for_a_fifth_of_the_level_3_margin_to_spare(cp1):
@@ -74,9 +83,10 @@ def test_strict_does_not_apply_when_less_than_level_3_is_required(cp1):
 
 def test_poses_without_a_stamp_fall_back_to_counting(cp1):
     watch = Steadiness(cp1, RULE)
-    result = [
-        (watch.feed(Pose(cp1.position, cp1.attitude), 3, False), watch.stable)[1] for _ in range(5)
-    ]
+    result = []
+    for _ in range(5):
+        watch.feed(Pose(cp1.position, cp1.attitude), 3, False)
+        result.append(watch.stable)
     assert result == [False, False, False, False, True]
 
 
@@ -112,3 +122,18 @@ def test_an_empty_tail_is_simply_not_stable(cp1):
     watch = Steadiness(cp1, RULE)
     assert watch.feed_tail([], now=1.0, required_level=3) is False
     assert watch.tail_report == ""
+
+
+def test_the_pose_remembered_from_a_tail_is_the_newest_stamped_one(cp1):
+    # 尾段紀錄若混進沒有時間戳的姿態（自訂的機器人才會），它們不算數，也不會被當成「最後的位置」。
+    watch = Steadiness(cp1, RULE)
+    tail = [rolled(cp1, 0.0, 9.0 + 0.05 * i) for i in range(21)]
+    tail.append(Pose(cp1.position, cp1.attitude))
+    assert watch.feed_tail(tail, now=10.1, required_level=3) is True
+    assert watch.last_pose is not None and watch.last_pose.stamp == pytest.approx(10.0)
+
+
+def test_the_pose_remembered_from_live_readings_is_the_last_one_fed(cp1):
+    watch = Steadiness(cp1, RULE)
+    feed(watch, cp1, [(1.0, 0.0), (1.25, 15.0)])
+    assert watch.last_pose is not None and watch.last_pose.stamp == 1.25

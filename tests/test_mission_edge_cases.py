@@ -4,16 +4,10 @@
 """
 
 from conftest import PERFECT
-from kibo.fake_robot import FakeRobot
+from kibo.ctl_result import MOVE_INVALID, MOVE_SUCCESS, MOVE_TIMEOUT
+from kibo.fake_robot import CAMERA_FIX_MAX_M, FakeRobot
 from kibo.geometry import FORWARD, Pose, add, axis_angle_quat, quat_mul, rotate
-from kibo.mission import (
-    DEFAULT_MISSION,
-    MOVE_INVALID,
-    MOVE_SUCCESS,
-    MOVE_TIMEOUT,
-    run_mission,
-)
-from kibo.simulate import CAMERA_FIX_MAX_M
+from kibo.mission import DEFAULT_MISSION, run_mission
 
 CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=CAMERA_FIX_MAX_M)
 SIDEWAYS_15CM = (0.0, 0.15, 0.0)  # 機體 +Y，與視線垂直：位置 Lv2、對中約 17° 也是 Lv2
