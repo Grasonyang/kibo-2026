@@ -18,6 +18,7 @@ import collections
 import os
 import sys
 import threading
+import xmlrpc.client
 
 # kibo/ 由 scripts/sim.sh 同步到這個檔案旁邊。直接執行時 sys.path[0] 本來就是這裡；
 # 若日後改由 catkin 安裝後的包裝腳本啟動，這行讓 `import kibo` 仍然找得到。
@@ -30,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 os.environ.setdefault("RES_OPTIONS", "single-request")
 
 import actionlib
+import rosgraph
 import rospy
 from actionlib_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
@@ -47,6 +49,7 @@ from platform_msgs.msg import UserLogic
 from platform_msgs.srv import StopProcessingUserNode, StopProcessingUserNodeResponse
 from sensor_msgs.msg import CameraInfo, Image
 
+from kibo.buslinks import topic_has_listener
 from kibo.judge import Pose
 from kibo.mission import (
     DEFAULT_MISSION,
@@ -69,6 +72,10 @@ NAV_FRESH_SEC = 1.0  # 導航資料比這舊就當作沒有
 NAV_HISTORY_LEN = 64  # 導航約 13 Hz，64 筆約 5 秒，夠看「到點前最後 1 秒」
 IMAGE_FRESH_SEC = 1.0
 POLL_SEC = 0.2
+EVENT_NODE = "/krpc_api_node"  # 官方的事件 API 節點
+EVENT_TOPIC = "/gs/data"  # 它把 mission_start 等事件轉發到這個 topic，評分模組在聽
+EVENT_LINK_TIMEOUT_SEC = 10.0  # 等「有人在聽」的上限
+EVENT_LINK_MAX_POLLS = int(EVENT_LINK_TIMEOUT_SEC / POLL_SEC) + 2
 
 ACTION_DONE = "done"
 ACTION_TIMEOUT = "timeout"
@@ -169,6 +176,7 @@ class RosRobot(Robot):
         return MOVE_ABORTED
 
     def mission_start(self):
+        self._wait_for_event_listener()
         res = self._call(self._mission_start, "/event/mission_start")
         return bool(res is not None and res.success)
 
@@ -247,6 +255,55 @@ class RosRobot(Robot):
                 rospy.logwarn("cancel failed: %s", exc)
 
     # ---- 內部 ----
+    def _wait_for_event_listener(self):
+        """等到事件 topic 真的有人連上，再送任務開始；有上限，查不到就不等。
+
+        為什麼：官方的事件 API 節點把 mission_start 轉發到一個沒有 latch 的 topic，評分模組
+        要連上才收得到。API 節點與我們同時啟動，我們若在評分模組連上之前就呼叫 mission_start，
+        「開始」會遺失，之後整場的通過通知與完成回報都被評分模組當成「任務還沒開始」丟掉。
+        2026-11-10 本機模擬器實際發生過（起跑後 1.3 秒就呼叫，整場沒有成績）。
+        官方範本沒中，只是因為它被 DNS 延遲拖了 5 秒。
+        這段等待在任務開始之前，不算在評分模組的任務時間內。"""
+        started = rospy.get_time()
+        links = []
+        for _ in range(EVENT_LINK_MAX_POLLS):
+            try:
+                links = self._event_topic_links()
+            except Exception as exc:  # 查不到（例如實機沒有這個節點）就不等
+                rospy.loginfo("event listener check unavailable (%s); not waiting", exc)
+                return
+            if topic_has_listener(links, EVENT_TOPIC):
+                rospy.loginfo(
+                    "event listener connected after %.1fs: %s",
+                    rospy.get_time() - started,
+                    [str(link[1]) for link in links],
+                )
+                return
+            if self.stop_requested() or rospy.get_time() - started > EVENT_LINK_TIMEOUT_SEC:
+                break
+            rospy.sleep(POLL_SEC)
+        rospy.logwarn(
+            "no listener on %s after %.1fs (links: %s); starting anyway",
+            EVENT_TOPIC,
+            rospy.get_time() - started,
+            links,
+        )
+
+    @staticmethod
+    def _event_topic_links():
+        """事件 API 節點在 EVENT_TOPIC 上的連線清單（ROS slave API 的 getBusInfo）。"""
+        caller = rospy.get_name()
+        uri = rosgraph.Master(caller).lookupNode(EVENT_NODE)
+        reply = xmlrpc.client.ServerProxy(uri).getBusInfo(caller)  # [狀態碼, 訊息, 連線清單]
+        if not isinstance(reply, (list, tuple)) or len(reply) < 3:
+            raise ValueError("unexpected getBusInfo reply: %r" % (reply,))
+        rows = reply[2] if isinstance(reply[2], (list, tuple)) else []
+        return [
+            row
+            for row in rows
+            if isinstance(row, (list, tuple)) and len(row) >= 5 and row[4] == EVENT_TOPIC
+        ]
+
     def _on_nav(self, msg):
         p = msg.pose.pose.position
         q = msg.pose.pose.orientation

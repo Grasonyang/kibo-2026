@@ -311,21 +311,28 @@ class _Run:
         window = (self.cfg.settle_samples - 1) * self.cfg.settle_interval_sec
         history = self.robot.recent_poses(window + self.cfg.settle_interval_sec)
         stamped = [p for p in history if p.stamp is not None]
-        if len(stamped) < self.cfg.settle_samples:
-            return None
+        if not stamped:
+            return None  # 這個機器人不提供紀錄
         newest, oldest = stamped[-1].stamp, stamped[0].stamp
-        if newest is None or oldest is None or newest - oldest < window:
+        if newest is None or oldest is None:
             return None
-        if self.robot.now() - newest > self.cfg.settle_interval_sec:
-            return None  # 紀錄不夠新，不能代表現在
+        span, age = newest - oldest, self.robot.now() - newest
         required = self.required_level()
-        last: Optional[Judgement] = None
-        for pose in stamped:
-            last = judge(pose, cp, self.cfg.camera_offset_m)
-            if last.level < required:
-                return None
+        judgements = [judge(pose, cp, self.cfg.camera_offset_m) for pose in stamped]
+        worst = min(j.level for j in judgements)
+        enough = (
+            len(stamped) >= self.cfg.settle_samples
+            and span >= window
+            and age <= self.cfg.settle_interval_sec
+        )
+        if not enough or worst < required:
+            self.log(
+                "tail of the move not usable: %d samples over %.2fs, newest %.2fs old, worst Lv%d"
+                % (len(stamped), span, age, worst)
+            )
+            return None
         self.last_pose = stamped[-1]
-        return Settled(last, True)
+        return Settled(judgements[-1], True)
 
     def move(self, cp: Checkpoint, attempts: int) -> bool:
         target = Pose(cp.position, target_attitude(cp))
