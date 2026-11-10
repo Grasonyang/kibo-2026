@@ -1,19 +1,30 @@
 # ROS 接線層
 
-這裡的檔案要放進官方範本的 catkin package 才能執行；本機沒有 ROS，只能過 `ruff` 與 `vermin`。
+這裡的檔案由 `scripts/sim.sh run`／`scripts/pack.sh` 同步進官方範本的 `krpc_user/scripts/` 才能執行。
+本機沒有 ROS，但 `pyright` 會檢查這個目錄（找不到 `rospy` 不算錯，呼叫了沒定義的方法會錯）。
 
 | 檔案 | 用途 |
 |---|---|
 | `user_node.py` | ROS 節點：`RosRobot` 實作 `kibo.mission.Robot`（含選用的相機修正 `marker_in_body`、`move_relative`），`UserNode` 保留官方要求的 start／stop／ready 三個介面 |
 
-## 接進官方範本（拿到 `krpc7th-simulator.tar.gz` 後）
+怎麼組進官方範本、怎麼跑，見 [docs/kibo/simulator.md](../docs/kibo/simulator.md)。
 
-1. `scripts/setup-sim.sh <tar>` 解壓並把 `users/catkin_ws/src/krpc_user/` 匯入成本 repo 的 `krpc_user/`。
-2. 看 `krpc_user/launch/` 或 `CMakeLists.txt` 裡啟動的是哪個腳本（手冊說範本是 `scripts/user_template.py`）。兩種做法擇一：
-   - 把 launch 檔改成啟動 `user_node.py`；或
-   - 保留檔名，把 `user_template.py` 的內容換成 `user_node.py`。
-3. `scripts/sim.sh run` 會把 `ros/` 同步到 `krpc_user/scripts/`、把 `src/kibo/` 同步到 `krpc_user/scripts/kibo/`，所以 `from kibo...` 找得到（前提：ROS 以腳本所在目錄執行；若不是，要在 `user_node.py` 開頭把該目錄加進 `sys.path`）。
-4. 確認 `package.xml` 有 `rospy`、`actionlib`、`ib2_msgs`、`krpc_ib2_msgs`、`platform_msgs`、`geometry_msgs` 的依賴（範本應該已經有）。
+## 已在本機模擬器驗證（2026-11-10）
+
+- 節點啟動、收到 `/ib2_user/start`、整場飛完並完成回報；normal 8 點全 Lv3。
+- `use_sim_time` 為真；`/sensor_fusion/navigation` 的 `header.stamp` 有值（比現在晚約 0.11 秒），frame 是 `iss_body`，約 200 Hz。
+- 影像 `/camera_main/image_raw` 是 800x800、`rgb8`。
+- `/ctl/command` 從 STAND_BY（剛起跑）直接送 `MOVE_TO_ABSOLUTE_TARGET` 可以，不用先 RELEASE。
+- 自判等級與官方 `result.json` 幾乎都一致。唯一的例外：一場 hard 的 Goal 自判 Lv2、官方 Lv1（機體還在轉就回報；原因與修正見 [simulator-internals.md](../docs/kibo/simulator-internals.md) 的 E8、E9）。
+- 起跑時服務呼叫卡 5 秒的問題與修法（`RES_OPTIONS=single-request`）寫在 `user_node.py` 開頭。
+- **起跑前要等事件 topic 的訂閱者都連上**（`_wait_for_event_listeners`），否則「任務開始」會遺失、整場沒有成績。
+  每次改動後都要看 `judge_module_logs/result.json`（或跑 `scripts/sim_report.py`），不能只看節點自己的 log。
+- 相機偵測得到 marker（`DICT_4X4_50`），但深度與導航差約 15 cm，相機修正維持關閉。
+
+還沒驗證：相機修正（預設關）、`/ib2_user/stop` 的中途停止、Web 模擬器。
+
+下面的劇本是拿到模擬器之前寫的；第 0、1 場要查的事大多已經由原始碼與首飛回答
+（[simulator-internals.md](../docs/kibo/simulator-internals.md)），留著是為了第一次上 **Web 模擬器**時照著核對。
 
 ## 第一次在模擬器：劇本（council v1-review R5）
 

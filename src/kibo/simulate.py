@@ -28,9 +28,9 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--checkpoints", type=int, default=8, help="含 Goal，規則是 6 到 12")
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--noise", type=float, default=0.03, help="到點位置誤差標準差（公尺）")
+    parser.add_argument("--noise", type=float, default=0.01, help="到點位置誤差標準差（公尺）")
     parser.add_argument("--fail", type=float, default=0.0, help="每次移動失敗的機率")
-    parser.add_argument("--speed", type=float, default=0.12, help="假機器人的真實線速度（m/s）")
+    parser.add_argument("--slowdown", type=float, default=1.0, help="假機器人實際比移動模型慢幾倍")
     parser.add_argument(
         "--camera", action="store_true", help="假機器人開相機，不穩時用 marker 修正"
     )
@@ -45,7 +45,7 @@ def main(argv: List[str]) -> int:
     robot_cfg = base._replace(
         position_noise_m=args.noise,
         move_fail_prob=args.fail,
-        speeds=base.speeds._replace(linear_mps=args.speed),
+        speeds=base.speeds._replace(slowdown=args.slowdown),
         camera=args.camera,
     )
     scores = []

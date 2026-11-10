@@ -63,18 +63,18 @@ def test_deliberate_late_probe_finishes_after_the_limit(three_point_message):
     assert robot.finished_at is not None and robot.finished_at > TIME_LIMIT_SEC
 
 
-def test_log_has_per_leg_seconds_that_reproduce_the_fake_speed(three_point_message):
+def test_log_has_distance_turn_and_seconds_for_every_leg(three_point_message):
     import re
 
     robot = FakeRobot(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)
-    legs = [re.search(r"leg: ([\d.]+)m in ([\d.]+)s", line) for line in robot.logs]
+    legs = [re.search(r"leg: ([\d.]+)m (\d+)deg in ([\d.]+)s", line) for line in robot.logs]
     legs = [m for m in legs if m]
     assert len(legs) == 3
     for m in legs:
-        metres, seconds = float(m.group(1)), float(m.group(2))
-        # 假機器人 0.12 m/s 加 3 秒起停：實測速度在 0.03 到 0.12 之間
-        assert 0.03 < metres / seconds <= 0.12
+        metres, seconds = float(m.group(1)), float(m.group(3))
+        # 上限速度 0.2 m/s，短腿加減速加轉向後平均慢很多
+        assert 0.01 < metres / seconds <= 0.2
     assert any("nav_age=" in line for line in robot.logs)
 
 
@@ -111,3 +111,24 @@ def test_deliberate_late_counts_notified_checkpoints_and_honours_stop(three_poin
     report = run_mission(robot, DEFAULT_MISSION._replace(deliberate_late_after=1))
     assert report.aborted == "stop requested"
     assert robot.t < 300.0  # 等到一半就被停下來，沒有硬睡到逾時
+
+
+def test_log_compares_what_the_camera_sees_with_what_navigation_expects(three_point_message):
+    import re
+
+    robot = FakeRobot(three_point_message, PERFECT._replace(camera=True, vision_noise_m=0.0))
+    run_mission(robot, DEFAULT_MISSION)
+    lines = [line for line in robot.logs if "marker #1 seen" in line]
+    assert len(lines) == 1
+    match = re.search(r"apart ([\d.]+)m", lines[0])
+    assert match is not None
+    apart = float(match.group(1))
+    assert apart < 0.01  # 假相機沒有誤差，導航也準：兩者應該重合
+    assert robot.relative_calls == 0  # 只記錄，沒有因此多動一下
+
+
+def test_a_robot_without_a_camera_just_says_the_marker_was_not_seen(three_point_message):
+    robot = FakeRobot(three_point_message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert any("marker #1 not seen" in line for line in robot.logs)
+    assert report.goal_reached

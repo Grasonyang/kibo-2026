@@ -16,7 +16,7 @@
 | `src/kibo/`、`tests/` | 不依賴 ROS 的任務邏輯、假機器人與單元測試 |
 | `ros/` | ROS 接線層 `user_node.py`，要放進官方範本才能跑 |
 | `docs/solution/` | 解法說明、spec、tickets、點子 |
-| `krpc_user/` | 提交給模擬器的 catkin package（取得官方開發資源後匯入，尚未建立） |
+| `krpc_user/` | 提交給模擬器的 catkin package（官方範本，launch 改成啟動我們的節點） |
 | `docs/kibo/` | 規則摘要、API 速查、模擬器與提交流程 |
 | `docs/agents/` | agent 協作流程（planner／worker／reviewer、交付、worktree） |
 | `docs/adr/`、`GLOSSARY.md` | 決策紀錄與用語 |
@@ -31,6 +31,7 @@ uv run pytest             # 純邏輯的單元測試
 uv run python -m kibo.simulate --runs 10   # 本機假機器人跑 10 場
 ```
 
-要跑模擬器，先從 <https://jaxa.krpc.jp/> 下載開發資源，見 [docs/kibo/simulator.md](docs/kibo/simulator.md)。協作規則與完整驗證指令見 [AGENTS.md](AGENTS.md)。
+要跑模擬器，先從 <https://jaxa.krpc.jp/download> 下載開發資源（不用登入），見 [docs/kibo/simulator.md](docs/kibo/simulator.md)。
+模擬器內部的評分規則在 [simulator-internals.md](docs/kibo/simulator-internals.md)，移動要花幾秒在 [motion-model.md](docs/kibo/motion-model.md)。協作規則與完整驗證指令見 [AGENTS.md](AGENTS.md)。
 
 流程文件複製自 `Yang-Home-99/agent-config`，之後獨立演進。

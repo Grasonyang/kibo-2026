@@ -24,14 +24,12 @@ def test_route_with_no_waypoints_goes_straight_to_goal():
     assert len(route.legs) == 1
 
 
-def test_leg_seconds_adds_travel_and_turn_time():
+def test_leg_seconds_is_the_motion_model_times_the_slowdown():
     yaw_90 = (0.0, 0.0, 0.7071068, 0.7071068)
-    speeds = Speeds(linear_mps=0.5, angular_dps=30.0)
-    # 1 公尺 / 0.5 m/s = 2 秒，90° / 30°/s = 3 秒
-    assert (
-        abs(leg_seconds((0.0, 0.0, 0.0), IDENTITY_QUAT, (1.0, 0.0, 0.0), yaw_90, speeds) - 5.0)
-        < 1e-6
-    )
+    leg = ((0.0, 0.0, 0.0), IDENTITY_QUAT, (1.0, 0.0, 0.0), yaw_90)
+    # 沿機體 X 軸 1 m：13.33 秒；繞 Z 轉 90°：(π/2)/0.4363 + 0.4363/0.2409 = 5.41 秒
+    assert abs(leg_seconds(*leg) - (13.33 + 5.41)) < 0.01
+    assert abs(leg_seconds(*leg, Speeds(slowdown=2.0)) - 2.0 * (13.33 + 5.41)) < 0.02
 
 
 def test_turning_cost_changes_the_order():

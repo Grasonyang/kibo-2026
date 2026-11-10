@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 """ROS 接線層：把 Int-Ball2 的 topic、service、action 接到 kibo 的任務邏輯。
 
@@ -10,12 +10,29 @@ ROS 訊息 <-> kibo 的 Pose 與 MOVE_* 結果。決策全部在 kibo.mission。
 - 提供 /ib2_user/stop（停止要求：先取消動作再回應）
 - 設定 /ib2_user/ready = True
 
-執行環境是 Python 3.6.9 / ROS Melodic。尚未在模擬器實測。
+執行環境是 Python 3.6.9 / ROS Melodic。shebang 與官方範本相同（/usr/bin/python3；
+映像裡的 `python` 是 2.7）。
 """
 
+import collections
+import os
+import sys
 import threading
+import time
+import xmlrpc.client
+
+# kibo/ 由 scripts/sim.sh 同步到這個檔案旁邊。直接執行時 sys.path[0] 本來就是這裡；
+# 若日後改由 catkin 安裝後的包裝腳本啟動，這行讓 `import kibo` 仍然找得到。
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+# 一定要在 import rospy 之前。模擬器的映像是 Ubuntu 18.04（glibc 2.27），容器名稱靠 Docker 內建
+# DNS 解析；glibc 預設同時送 A 與 AAAA 查詢，其中一個回應會被丟掉，於是**每個執行緒**頭幾次
+# 查詢各卡 5 秒（rospy 連 master 與服務時都會查）。實測第一場因此在起跑時白等了 10 秒。
+# single-request 讓兩個查詢一前一後送，就不會卡。實機上沒有這個問題，設了也無害。
+os.environ.setdefault("RES_OPTIONS", "single-request")
 
 import actionlib
+import rosgraph
 import rospy
 from actionlib_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
@@ -33,6 +50,7 @@ from platform_msgs.msg import UserLogic
 from platform_msgs.srv import StopProcessingUserNode, StopProcessingUserNodeResponse
 from sensor_msgs.msg import CameraInfo, Image
 
+from kibo.buslinks import missing_listeners, topic_parties
 from kibo.judge import Pose
 from kibo.mission import (
     DEFAULT_MISSION,
@@ -43,7 +61,7 @@ from kibo.mission import (
     Robot,
     run_mission,
 )
-from kibo.vision import observe_markers
+from kibo.vision import gray_from_raw, observe_markers
 
 SERVICE_TIMEOUT_SEC = 10.0  # 等服務出現，以及等它回應，各自的上限
 SERVICE_POLL_SEC = 0.05
@@ -52,8 +70,16 @@ ACTION_SERVER_TIMEOUT_SEC = 10.0
 NOTIFY_TIMEOUT_SEC = 15.0
 CANCEL_WAIT_SEC = 5.0
 NAV_FRESH_SEC = 1.0  # 導航資料比這舊就當作沒有
+NAV_HISTORY_STEP_SEC = 0.05  # 導航實測約 200 Hz；紀錄降到 20 Hz 就夠判斷「到點前最後 1 秒」
+NAV_HISTORY_LEN = 64  # 20 Hz x 64 筆，約 3 秒
 IMAGE_FRESH_SEC = 1.0
 POLL_SEC = 0.2
+EVENT_SERVICE = "/event/mission_start"
+EVENT_TOPIC = "/gs/data"  # 官方的事件 API 把 mission_start 等事件轉發到這個 topic，評分模組在聽
+EVENT_WAIT_SEC = 10.0  # 等「訂閱者都連上」的上限（牆鐘）
+EVENT_QUERY_SEC = 2.0  # 問一次連線狀況的上限（牆鐘）；XMLRPC 本身沒有逾時
+EVENT_MAX_POLLS = int(EVENT_WAIT_SEC / POLL_SEC) + 2
+EVENT_ABSENT_POLLS = 3  # 連續這麼多次都沒有人發佈 EVENT_TOPIC，才認定這裡沒有這種接法
 
 ACTION_DONE = "done"
 ACTION_TIMEOUT = "timeout"
@@ -63,8 +89,9 @@ ACTION_STOPPED = "stopped"
 class RosRobot(Robot):
     def __init__(self):
         self._nav = None  # 最新的 Navigation 訊息
+        self._nav_history = collections.deque(maxlen=NAV_HISTORY_LEN)  # 最近幾秒的 Pose
         self._nav_count = 0
-        self._init_time = rospy.get_time()
+        self._nav_first_stamp = None  # 第一筆導航的 stamp，算頻率用
         self._nav_lock = threading.Lock()
         self._stop = threading.Event()
         self._active_lock = threading.Lock()
@@ -84,8 +111,13 @@ class RosRobot(Robot):
         self._image = None
         self._camera_info = None
         self._image_lock = threading.Lock()
-        self._image_sub = rospy.Subscriber("/camera_main/image_raw", Image, self._on_image)
-        self._info_sub = rospy.Subscriber("/camera_main/camera_info", CameraInfo, self._on_info)
+        # 只留最新一張：影像很大，排隊只會讓我們看到舊畫面
+        self._image_sub = rospy.Subscriber(
+            "/camera_main/image_raw", Image, self._on_image, queue_size=1, buff_size=2**24
+        )
+        self._info_sub = rospy.Subscriber(
+            "/camera_main/camera_info", CameraInfo, self._on_info, queue_size=1
+        )
 
     # ---- Robot 介面 ----
     def now(self):
@@ -111,6 +143,11 @@ class RosRobot(Robot):
         p = nav.pose.pose.position
         q = nav.pose.pose.orientation
         return Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=nav.pose.header.stamp.to_sec())
+
+    def recent_poses(self, seconds):
+        oldest = rospy.get_time() - seconds
+        with self._nav_lock:
+            return [pose for pose in self._nav_history if pose.stamp >= oldest]
 
     def move_to(self, target, timeout_sec):
         if not self._command.wait_for_server(rospy.Duration(ACTION_SERVER_TIMEOUT_SEC)):
@@ -143,6 +180,7 @@ class RosRobot(Robot):
         return MOVE_ABORTED
 
     def mission_start(self):
+        self._wait_for_event_listeners()
         res = self._call(self._mission_start, "/event/mission_start")
         return bool(res is not None and res.success)
 
@@ -221,10 +259,118 @@ class RosRobot(Robot):
                 rospy.logwarn("cancel failed: %s", exc)
 
     # ---- 內部 ----
+    def _wait_for_event_listeners(self):
+        """等到事件 topic 的訂閱者都連上，再送任務開始。有牆鐘上限；這裡沒有這種接法就不等。
+
+        為什麼：官方的事件 API 節點把 mission_start 轉發到一個沒有 latch 的 topic（EVENT_TOPIC），
+        評分模組要連上才收得到。API 節點與我們同時啟動；我們若在評分模組連上之前就呼叫
+        mission_start，「開始」會遺失，之後整場的通過通知與完成回報都被評分模組當成
+        「任務還沒開始」丟掉。2026-11-10 本機模擬器實際發生過兩次（整場沒有成績）。
+        官方範本沒中，只是因為它被 DNS 延遲拖了 5 秒。
+
+        規則不認節點名字：master 登記的訂閱者全部都和發佈者連上了，就出發。
+        這段等待用牆鐘計時（模擬時鐘停住也不會卡住），最多 EVENT_WAIT_SEC；等不到照樣出發，
+        因為不出發一定 0 分。等待的秒數算在我們自己的時間預算裡（保守，見 kibo.mission 的 t0）。"""
+        try:
+            # 服務出現之後，API 節點的發佈者一定已經登記（它先建 publisher 才建 service）。
+            rospy.wait_for_service(EVENT_SERVICE, timeout=SERVICE_TIMEOUT_SEC)
+        except rospy.ROSException as exc:
+            rospy.logerr("%s unavailable: %s", EVENT_SERVICE, exc)
+            return
+        started = time.time()
+        absent = 0
+        status = None
+        for _ in range(EVENT_MAX_POLLS):
+            status = self._bounded(self._event_listener_status, EVENT_QUERY_SEC)
+            if status is not None:
+                publishers, missing = status
+                if publishers and not missing:
+                    rospy.loginfo("event listeners connected after %.1fs", time.time() - started)
+                    return
+                absent = 0 if publishers else absent + 1
+                if absent >= EVENT_ABSENT_POLLS:
+                    rospy.loginfo("nobody publishes %s here; not waiting", EVENT_TOPIC)
+                    return
+            if self.stop_requested() or time.time() - started > EVENT_WAIT_SEC:
+                break
+            time.sleep(POLL_SEC)
+        rospy.logwarn(
+            "listeners on %s not all connected after %.1fs (last status: %s); starting anyway",
+            EVENT_TOPIC,
+            time.time() - started,
+            status,
+        )
+
+    @staticmethod
+    def _event_listener_status():
+        """回傳 (EVENT_TOPIC 的發佈者, 還沒連上任何一個發佈者的訂閱者)。
+
+        問 master 誰發誰訂（getSystemState），再問每個發佈者它的連線（slave API 的 getBusInfo）。
+        這幾個 XMLRPC 呼叫都沒有逾時，所以一定要經過 `_bounded` 呼叫。"""
+        caller = rospy.get_name()
+        master = rosgraph.Master(caller)
+        publishers, subscribers = topic_parties(master.getSystemState(), EVENT_TOPIC)
+        missing = []
+        for publisher in publishers:
+            reply = xmlrpc.client.ServerProxy(master.lookupNode(publisher)).getBusInfo(caller)
+            bus_info = reply[2] if isinstance(reply, (list, tuple)) and len(reply) >= 3 else None
+            missing.extend(missing_listeners(bus_info, EVENT_TOPIC, subscribers))
+        return publishers, missing
+
+    @staticmethod
+    def _bounded(function, wall_timeout_sec):
+        """在 daemon thread 裡呼叫 `function()`，最多等 wall_timeout_sec（牆鐘）。
+
+        回傳它的結果；逾時或丟例外回 None（例外記一行）。逾時時那個 thread 會留在背景，
+        不會擋住任務。"""
+        box = {}
+        done = threading.Event()
+
+        def worker():
+            try:
+                box["result"] = function()
+            except Exception as exc:  # 查詢失敗只是「不知道」，不能讓任務出事
+                box["error"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=worker, name="bounded", daemon=True).start()
+        if not done.wait(wall_timeout_sec):
+            rospy.logwarn("query did not answer within %.1fs", wall_timeout_sec)
+            return None
+        if "error" in box:
+            rospy.logwarn("query failed: %r", box["error"])
+            return None
+        return box.get("result")
+
     def _on_nav(self, msg):
+        stamp = msg.pose.header.stamp.to_sec()
         with self._nav_lock:
             self._nav = msg
             self._nav_count += 1
+            if self._nav_first_stamp is None:
+                self._nav_first_stamp = stamp
+            history = self._nav_history
+            if history and 0.0 <= stamp - history[-1].stamp < NAV_HISTORY_STEP_SEC:
+                return  # 這個 callback 一秒跑 200 次，大部分在這裡就結束
+            p = msg.pose.pose.position
+            q = msg.pose.pose.orientation
+            history.append(Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=stamp))
+
+    def _on_image(self, msg):
+        with self._image_lock:
+            self._image = msg
+
+    def _on_info(self, msg):
+        with self._image_lock:
+            self._camera_info = msg
+
+    @staticmethod
+    def _to_gray(image):
+        gray = gray_from_raw(image.data, image.width, image.height, image.step, image.encoding)
+        if gray is None:
+            rospy.logwarn("unsupported image: encoding=%s step=%d", image.encoding, image.step)
+        return gray
 
     def _on_ctl(self, msg):
         """/ctl/status 的 type 是 CtlStatusType，裡面才是 int32 type（手冊 6.3.2）。
@@ -237,7 +383,7 @@ class RosRobot(Robot):
             self._ctl_type = new_type
 
     def survey(self):
-        """只印資料、不阻塞、不丟例外：nav 頻率（從節點啟動到現在）、stamp、status、
+        """只印資料、不阻塞、不丟例外：nav 頻率（第一筆到最新一筆）、stamp、status、
         camera_info、影像 encoding、sim time。失敗只 log，絕不影響任務。"""
         try:
             self._survey()
@@ -246,8 +392,11 @@ class RosRobot(Robot):
 
     def _survey(self):
         with self._nav_lock:
-            nav, count = self._nav, self._nav_count
-        window = max(rospy.get_time() - self._init_time, 1e-3)
+            nav, count, first = self._nav, self._nav_count, self._nav_first_stamp
+        # 用導航自己的 stamp 算頻率：節點剛啟動時模擬時鐘可能還是 0，不能拿啟動時刻當起點。
+        window = 1e-3
+        if nav is not None and first is not None:
+            window = max(nav.pose.header.stamp.to_sec() - first, 1e-3)
         rospy.loginfo(
             "[survey] use_sim_time=%s now=%.3f nav_msgs=%d over %.1fs (%.1f Hz)",
             rospy.get_param("/use_sim_time", False),
@@ -342,6 +491,9 @@ class RosRobot(Robot):
         if "error" in box:
             rospy.logerr("%s failed: %s", name, box["error"])
             return None
+        waited = SERVICE_TIMEOUT_SEC - (ros_deadline - rospy.get_time())
+        if waited > 1.0:  # 正常是幾毫秒；慢了要在 log 留下證據
+            rospy.logwarn("%s took %.1fs", name, waited)
         return box.get("result")
 
     def _run_action(self, client, goal, timeout_sec):
@@ -361,15 +513,12 @@ class RosRobot(Robot):
                     if client.get_state() == GoalStatus.REJECTED:
                         return ACTION_DONE, None
                     return ACTION_DONE, client.get_result()
-                if self.stop_requested():
+                if self.stop_requested() or rospy.get_time() > deadline:
                     break
-                if rospy.get_time() > deadline:
-                    client.cancel_goal()
-                    client.wait_for_result(rospy.Duration(CANCEL_WAIT_SEC))
-                    return ACTION_TIMEOUT, None
+            # 走到這裡有三種：收到停止、過了期限、輪詢次數用完。後兩種都是逾時。
             client.cancel_goal()
             client.wait_for_result(rospy.Duration(CANCEL_WAIT_SEC))
-            return ACTION_STOPPED, None
+            return (ACTION_STOPPED if self.stop_requested() else ACTION_TIMEOUT), None
         finally:
             with self._active_lock:
                 if client in self._active_goals:
@@ -433,7 +582,7 @@ class UserNode(object):
 
 
 def main():
-    rospy.init_node("krpc_user_node")
+    rospy.init_node("krpc_user")  # 官方用 /krpc_user 這個名字擷取 log、結束節點（run.sh）
     UserNode()
     rospy.spin()
 

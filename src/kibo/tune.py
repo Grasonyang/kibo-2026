@@ -26,14 +26,14 @@ def variants() -> List[Variant]:
     base = DEFAULT_MISSION
     budget = base.budget
     return [
-        Variant("預設（保險 25s，穩定 8s）", base),
+        Variant("預設（保險 15s，穩定 1s）", base),
         Variant("不校正速度", base._replace(calibrate_speed=False)),
-        Variant("保險 10s", base._replace(budget=budget._replace(margin_sec=10.0))),
-        Variant("保險 45s", base._replace(budget=budget._replace(margin_sec=45.0))),
+        Variant("保險 5s", base._replace(budget=budget._replace(margin_sec=5.0))),
+        Variant("保險 30s", base._replace(budget=budget._replace(margin_sec=30.0))),
+        Variant("穩定估 0s", base._replace(budget=budget._replace(settle_sec=0.0))),
         Variant("穩定估 4s", base._replace(budget=budget._replace(settle_sec=4.0))),
-        Variant("穩定估 12s", base._replace(budget=budget._replace(settle_sec=12.0))),
         Variant("只求 Lv2", base._replace(target_level=2)),
-        Variant("趕時間門檻 90s", base._replace(hurry_sec=90.0)),
+        Variant("趕時間門檻 15s", base._replace(hurry_sec=15.0)),
         Variant("不刪點（只做對照）", base._replace(budget=budget._replace(allow_drop=False))),
     ]
 
@@ -86,7 +86,7 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--noise", type=float, default=0.05)
     parser.add_argument("--fail", type=float, default=0.1)
-    parser.add_argument("--speed", type=float, default=0.1, help="假機器人的真實線速度（m/s）")
+    parser.add_argument("--slowdown", type=float, default=1.0, help="假機器人實際比移動模型慢幾倍")
     args = parser.parse_args(argv)
     if args.runs < 1:
         parser.error("--runs must be at least 1")
@@ -97,18 +97,11 @@ def main(argv: List[str]) -> int:
     robot_cfg = base._replace(
         position_noise_m=args.noise,
         move_fail_prob=args.fail,
-        speeds=base.speeds._replace(linear_mps=args.speed),
+        speeds=base.speeds._replace(slowdown=args.slowdown),
     )
     print(
-        "%d 場、%d 點、誤差 %.2fm、失敗率 %.0f%%、真速 %.2fm/s（規劃假設 %.2f）"
-        % (
-            args.runs,
-            args.checkpoints,
-            args.noise,
-            args.fail * 100,
-            args.speed,
-            DEFAULT_MISSION.budget.speeds.linear_mps,
-        )
+        "%d 場、%d 點、誤差 %.2fm、失敗率 %.0f%%、比模型慢 %.2f 倍"
+        % (args.runs, args.checkpoints, args.noise, args.fail * 100, args.slowdown)
     )
     print(
         "世界：A=Goal 需全部通過，B=只需 Goal 點；T0=逾時整場 0，T1=逾時保留已得分。"

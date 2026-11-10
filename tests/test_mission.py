@@ -45,7 +45,7 @@ def test_flaky_checkpoint_service_is_retried(three_point_message):
 
 def test_slow_robot_drops_checkpoints_but_still_reaches_goal_in_time():
     message = random_checkpoints_message(12, seed=7)
-    slow = PERFECT._replace(speeds=Speeds(linear_mps=0.03, angular_dps=5.0))
+    slow = PERFECT._replace(speeds=Speeds(slowdown=3.0))
     # 規劃也知道自己慢，才會提前放棄
     cfg = DEFAULT_MISSION._replace(budget=DEFAULT_MISSION.budget._replace(speeds=slow.speeds))
     robot = FakeRobot(message, slow, seed=7)

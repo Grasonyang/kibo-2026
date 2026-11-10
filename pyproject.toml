@@ -26,14 +26,19 @@ packages = ["src/kibo"]
 line-length = 100
 target-version = "py37"
 src = ["src", "tests"]
+# krpc_user/ 的範本是官方檔案，照原樣保留（方便日後與新版比對），不套我們的格式。
+extend-exclude = ["krpc_user/scripts/user_template.py"]
 
 [tool.ruff.lint]
 # UP 系列會把語法升到 3.7 以後，執行環境是 3.6，所以不啟用。
 select = ["E", "F", "I", "B"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "ros"]
 extraPaths = ["src"]
+# ros/ 的 rospy 等套件本機沒有；關掉「找不到 import」，其餘（例如呼叫了沒定義的方法）照查。
+reportMissingImports = false
+reportMissingModuleSource = false
 pythonVersion = "3.8"
 typeCheckingMode = "standard"
 

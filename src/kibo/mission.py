@@ -18,12 +18,14 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
-from kibo.geometry import Vec3, distance, norm
-from kibo.judge import CAMERA_OFFSET, Judgement, Pose, judge, target_attitude
+from kibo.geometry import Vec3, distance, norm, quat_angle
+from kibo.judge import JUDGE_ORIGIN, Judgement, Pose, judge, target_attitude, top_band_usage
 from kibo.planner import Speeds, leg_seconds
 from kibo.vision import body_correction, expected_marker_in_body
 
 ABORT_STOP = "stop requested"
+
+TOP_LEVEL = 3  # 最高的通過等級；notify_margin 的緩衝只在追求這一級時才有意義
 
 MOVE_SUCCESS = "success"
 MOVE_TIMEOUT = "timeout"
@@ -69,6 +71,13 @@ class Robot(ABC):
     def stop_requested(self) -> bool:
         return False
 
+    def recent_poses(self, seconds: float) -> List[Pose]:
+        """最近 seconds 秒內收到的導航資料，舊的在前，每筆都要有 stamp；沒有紀錄就回空清單（選用）。
+
+        移動的 action 還沒回來時機器人其實已經停在目標附近幾秒了；有這段紀錄，
+        「在容差內待滿 1 秒」就不用從 action 回來才開始數。"""
+        return []
+
     def marker_in_body(self, marker_id: int) -> Optional[Vec3]:
         """相機看到的 marker 中心在機體座標系的位置；沒有相機或沒看到就回 None（選用）。"""
         return None
@@ -91,24 +100,28 @@ class MissionConfig(NamedTuple):
     settle_interval_sec: float = 0.25
     settle_timeout_sec: float = 6.0
     target_level: int = 3
-    hurry_sec: float = 40.0  # 剩餘時間少於這個就不再追求 Lv3
+    hurry_sec: float = 5.0  # 這一點的餘裕（剩餘時間扣掉後面還要飛的）少於這個，就不再追求 Lv3
+    refine_sec: float = 15.0  # 餘裕多於這個，沒穩定時才值得再移動一次去修正
+    notify_margin: float = 0.8  # 有餘裕時，先等到三個量都在 Lv3 上限的這個比例以內才回報
+    settle_strict_sec: float = 3.0  # 上面那個較嚴的標準最多等這麼久，之後照一般的 Lv3 標準
     notify_attempts: int = 2
     checkpoints_attempts: int = 3
     checkpoints_retry_sec: float = 1.0
     pose_attempts: int = 5
-    camera_offset_m: Vec3 = CAMERA_OFFSET  # 對中用相機位置；伺服器若用機體中心就設成 (0, 0, 0)
+    camera_offset_m: Vec3 = JUDGE_ORIGIN  # 官方 judge.py 的對中從機體中心量；不要改，留著只為對照
     camera_fix_max_m: float = (
         0.0  # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
     )
-    calibrate_speed: bool = True  # 用實測的移動速度修正時間預算（只往慢的方向）
-    min_speed_ratio: float = 0.5  # 校正後的速度不低於預設的這個比例
-    calibrate_below_ratio: float = 0.8  # 實測比預設慢超過這個比例才校正；實測含起停，略慢是正常
-    calibrate_min_leg_m: float = 1.0  # 只用這麼長以上的腿校正；短腿的秒數被起停吃掉，不反映速度
+    calibrate_speed: bool = True  # 用實測的移動秒數修正時間預算（只往慢的方向）
+    min_speed_ratio: float = 0.5  # 校正的上限：最多當作比模型慢 1/0.5 = 2 倍
+    calibrate_below_ratio: float = 0.8  # 死區：實測在模型的 1/0.8 = 1.25 倍以內不校正
+    calibrate_min_leg_m: float = 0.5  # 只用這麼長以上的腿校正
     # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
     notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
     skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
     deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
     calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
+    log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
 
     @property
     def probes_on(self) -> bool:
@@ -155,11 +168,15 @@ class _Run:
     def __init__(self, robot: Robot, config: MissionConfig) -> None:
         self.robot = robot
         self.cfg = config
-        self.t0 = robot.now()  # 假設：/ib2_user/start 到來時 Release 剛完成；待模擬器驗證
+        # 我們的時鐘從 /ib2_user/start 到來起算。評分模組記的任務時間是從它收到 mission_start 起算
+        # （docs/kibo/simulator-internals.md），比我們晚一點（起跑前最多等 10 秒確認它連上），
+        # 所以我們的剩餘時間只會偏少、不會偏多。Web 模擬器的時限若從起跑訊號算，這樣也安全。
+        self.t0 = robot.now()
         self.visits: List[Visit] = []
         self.dropped: List[int] = []
         self.last_pose: Optional[Pose] = None
         self.speeds: Speeds = config.budget.speeds  # 會被實測往慢的方向修
+        self.reserved_sec = 0.0  # 目前這一點之後還要飛多久（_fly 每一點更新）
         self.predicted_sec = 0.0  # 長腿的模型預測秒數累積
         self.actual_sec = 0.0  # 同一批腿的實際秒數累積
 
@@ -197,11 +214,21 @@ class _Run:
                 self.robot.sleep(self.cfg.checkpoints_retry_sec)
         return None
 
+    def slack(self) -> float:
+        """這一點還能多花幾秒：剩餘時間扣掉後面的路線需要的秒數。
+
+        用「剩餘時間」的絕對值來判斷趕不趕是錯的：到 Goal 時剩 26 秒其實很充裕（後面沒事了），
+        中途剩 100 秒卻可能已經落後。"""
+        return self.remaining() - self.reserved_sec
+
     def required_level(self) -> int:
-        return 1 if self.remaining() < self.cfg.hurry_sec else self.cfg.target_level
+        return 1 if self.slack() < self.cfg.hurry_sec else self.cfg.target_level
 
     def move_timeout(self, target: Optional[Pose] = None) -> float:
-        """至少 move_timeout_sec，長腿放大到估計秒數的兩倍；不超過剩餘時間，但最少 5 秒。"""
+        """至少 move_timeout_sec，長腿放大到估計秒數的三倍；不超過剩餘時間，但最少 5 秒。
+
+        三倍：校正最多只認「慢 2 倍」，逾時要比那更寬，否則慢 2 倍多的機器人
+        每段長腿都會被自己取消。"""
         timeout = self.cfg.move_timeout_sec
         if target is not None and self.last_pose is not None:
             estimate = leg_seconds(
@@ -211,7 +238,7 @@ class _Run:
                 target.orientation,
                 self.speeds,
             )
-            timeout = max(timeout, 2.0 * estimate)
+            timeout = max(timeout, 3.0 * estimate)
         return max(5.0, min(timeout, self.remaining()))
 
     def record_leg(
@@ -222,9 +249,9 @@ class _Run:
         逾時的腿也算證據：實際秒數至少是逾時值，所以算出來的「慢幾倍」是下界，
         只會把速度往慢修，方向安全；沒有它，比假設慢很多的機器人會一直逾時、永遠學不到。
 
-        比的是「模型預測的秒數」對「實際秒數」，所以轉向多的腿不會被誤判成飛得慢。
-        實際比預測慢超過死區才動，而且只往慢修、不低於預設的一半；短腿不算，
-        因為起停時間會把它的秒數撐大。
+        比的是「模型預測的秒數」對「實際秒數」。模型在本機模擬器上每段腿只差一兩秒，
+        所以這是保險：Web 模擬器或實機若整體比較慢，實測會把規劃用的秒數等比例放大。
+        慢超過死區才動，只往慢修，最多 2 倍；很短的腿不算（一兩秒的誤差佔比太大）。
         """
         if start is None or seconds <= 0.0:
             return
@@ -234,8 +261,14 @@ class _Run:
             start.position, start.orientation, target.position, target.orientation, default
         )
         self.log(
-            "leg: %.2fm in %.1fs (model %.1fs)%s"
-            % (metres, seconds, predicted, " TIMED OUT, lower bound" if timed_out else "")
+            "leg: %.2fm %.0fdeg in %.1fs (model %.1fs)%s"
+            % (
+                metres,
+                quat_angle(start.orientation, target.orientation),
+                seconds,
+                predicted,
+                " TIMED OUT, lower bound" if timed_out else "",
+            )
         )
         if not self.cfg.calibrate_speed or metres < self.cfg.calibrate_min_leg_m:
             return
@@ -247,11 +280,11 @@ class _Run:
         if slowdown <= 1.0 / self.cfg.calibrate_below_ratio:
             slowdown = 1.0  # 在死區內：用預設值（已校正過的也拉回預設，不留棘輪）
         slowdown = min(slowdown, 1.0 / self.cfg.min_speed_ratio)
-        calibrated = Speeds(default.linear_mps / slowdown, default.angular_dps / slowdown)
-        if abs(calibrated.linear_mps - self.speeds.linear_mps) > 1e-9:
+        calibrated = default._replace(slowdown=default.slowdown * slowdown)
+        if abs(calibrated.slowdown - self.speeds.slowdown) > 1e-9:
             self.log(
-                "speed calibrated: %.3f -> %.3f m/s (x%.2f vs model, over %.0fs of legs)"
-                % (self.speeds.linear_mps, calibrated.linear_mps, slowdown, self.predicted_sec)
+                "speed calibrated: slowdown %.2f -> %.2f (x%.2f vs model, over %.0fs of legs)"
+                % (self.speeds.slowdown, calibrated.slowdown, slowdown, self.predicted_sec)
             )
             self.speeds = calibrated
 
@@ -261,7 +294,11 @@ class _Run:
         同一筆導航資料只算一次：若 stamp 沒變，不計入連續次數，免得導航更新慢時
         把同一筆讀五次當成「穩定 1 秒」。
         """
+        already = self.settled_already(cp)
+        if already is not None:
+            return already
         deadline = self.robot.now() + self.cfg.settle_timeout_sec
+        strict_until = self.robot.now() + self.cfg.settle_strict_sec
         streak = 0
         last: Optional[Judgement] = None
         last_stamp: Optional[float] = None
@@ -277,11 +314,58 @@ class _Run:
                 continue
             last_stamp = pose.stamp
             last = judge(pose, cp, self.cfg.camera_offset_m)
-            streak = streak + 1 if last.level >= self.required_level() else 0
+            strict = self.robot.now() < strict_until
+            streak = streak + 1 if self.good_enough(last, cp, strict) else 0
             if streak >= self.cfg.settle_samples:
                 return Settled(last, True)
             self.robot.sleep(self.cfg.settle_interval_sec)
         return Settled(last, False)
+
+    def good_enough(self, judgement: Judgement, cp: Checkpoint, strict: bool) -> bool:
+        """這一筆判定夠不夠格算進「連續達標」。
+
+        一般標準是達到 required_level。`strict` 而且要求的是最高級（Lv3）時再加一條：
+        三個量都要在 Lv3 上限的 notify_margin 以內。原因：官方判定用的姿態最多舊 0.2 秒，
+        而 Goal 點（marker 12，視線幾乎正對 -X）的滾轉讀數會把 1° 的指向誤差放大成 7° 左右，
+        貼著 10° 回報很容易掉到 Lv2。"""
+        required = self.required_level()
+        if judgement.level < required:
+            return False
+        if strict and required >= TOP_LEVEL:
+            return top_band_usage(judgement, cp) <= self.cfg.notify_margin
+        return True
+
+    def settled_already(self, cp: Checkpoint) -> Optional[Settled]:
+        """移動尾段的導航紀錄若顯示已經連續達標夠久，直接算穩定；否則回 None，照常等。
+
+        「夠久」與 settle 迴圈同一個標準：settle_samples 筆以上、頭尾相隔至少
+        (settle_samples - 1) x settle_interval_sec（預設 1 秒），而且每一筆都達標。"""
+        window = (self.cfg.settle_samples - 1) * self.cfg.settle_interval_sec
+        history = self.robot.recent_poses(window + self.cfg.settle_interval_sec)
+        stamped = [p for p in history if p.stamp is not None]
+        if not stamped:
+            return None  # 這個機器人不提供紀錄
+        newest, oldest = stamped[-1].stamp, stamped[0].stamp
+        if newest is None or oldest is None:
+            return None
+        span, age = newest - oldest, self.robot.now() - newest
+        judgements = [judge(pose, cp, self.cfg.camera_offset_m) for pose in stamped]
+        worst = min(j.level for j in judgements)
+        usage = max(top_band_usage(j, cp) for j in judgements)
+        enough = (
+            len(stamped) >= self.cfg.settle_samples
+            and span >= window
+            and age <= self.cfg.settle_interval_sec
+        )
+        if not enough or not all(self.good_enough(j, cp, True) for j in judgements):
+            self.log(
+                "tail of the move not usable: %d samples over %.2fs, newest %.2fs old, "
+                "worst Lv%d, used %.0f%% of the Lv3 margin"
+                % (len(stamped), span, age, worst, usage * 100.0)
+            )
+            return None
+        self.last_pose = stamped[-1]
+        return Settled(judgements[-1], True)
 
     def move(self, cp: Checkpoint, attempts: int) -> bool:
         target = Pose(cp.position, target_attitude(cp))
@@ -346,11 +430,43 @@ class _Run:
         )
         return result == MOVE_SUCCESS
 
+    def log_marker(self, cp: Checkpoint) -> None:
+        """只記錄、不影響任務：相機看到的 marker 在哪，照導航算又該在哪。
+
+        兩者差多少，就是相機這條路（字典、marker 邊長、座標換算）可不可信的證據；
+        在開啟相機修正之前，先用這行 log 累積資料。任何失敗都只記一行。"""
+        if not self.cfg.log_marker or self.last_pose is None:
+            return
+        try:
+            observed = self.robot.marker_in_body(cp.id)
+        except Exception as exc:  # 診斷碼不能讓任務出事
+            self.log("marker #%d check failed: %r" % (cp.id, exc))
+            return
+        if observed is None:
+            self.log("marker #%d not seen" % cp.id)
+            return
+        pose = self.last_pose
+        expected = expected_marker_in_body(pose.position, pose.orientation, cp.marker_position)
+        self.log(
+            "marker #%d seen at body (%.3f, %.3f, %.3f), nav expects (%.3f, %.3f, %.3f), "
+            "apart %.3fm"
+            % (
+                cp.id,
+                observed[0],
+                observed[1],
+                observed[2],
+                expected[0],
+                expected[1],
+                expected[2],
+                distance(observed, expected),
+            )
+        )
+
     def visit(self, cp: Checkpoint) -> Visit:
         moved = self.move(cp, self.cfg.max_move_attempts)
         settled = self.settle(cp)
         self.log(self.describe(cp, settled))
-        if not settled.stable and moved and self.remaining() > self.cfg.hurry_sec:
+        if not settled.stable and moved and self.slack() > self.cfg.refine_sec:
             # 再修正一次通常就夠了；只做一次，不無限修正。有相機就用相機，沒有就再絕對移動一次。
             if self.camera_fix(cp) or self.move(cp, 1):
                 settled = self.settle(cp)
@@ -360,6 +476,7 @@ class _Run:
         # 也不回報。探針旗標 notify_even_if_level0 可以在模擬器上覆寫這兩條。
         should_notify = (settled.level > 0 and moved) or self.cfg.notify_even_if_level0
         notified = should_notify and self.notify(cp)
+        self.log_marker(cp)  # 通知送出之後才做，不拖慢回報
         notified_so_far = sum(1 for v in self.visits if v.notified) + (1 if notified else 0)
         if self.cfg.deliberate_late_after and notified_so_far == self.cfg.deliberate_late_after:
             self.log("PROBE: deliberately waiting past the time limit")
@@ -435,6 +552,10 @@ def _fly(run: _Run, robot: Robot, config: MissionConfig) -> Tuple[bool, str]:
             pending = [cp for cp in pending if cp.id not in plan.dropped]
         run.log("route %s (~%.0fs)" % (plan.route.order, plan.estimated_sec))
         target = by_id[plan.route.order[0]]
+        # 這一點之後還要的秒數 = 整條路線的估計，扣掉去這一點的腿與在這一點停留的時間
+        run.reserved_sec = max(
+            0.0, plan.estimated_sec - plan.route.legs[0].seconds - config.budget.settle_sec
+        )
         record = run.visit(target)
         if target.id == cps.goal.id:
             goal_reached = record.notified

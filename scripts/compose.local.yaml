@@ -1,0 +1,6 @@
+# 疊在官方 docker-compose.yaml 上的本機設定（官方檔案不改）。
+# 畫面（noVNC，沒有密碼）只綁在本機，避免整個區網都連得到；埠可用 KIBO_SIM_PORT 換。
+services:
+  krpc:
+    ports: !override
+      - "127.0.0.1:${KIBO_SIM_PORT:-8080}:80"

@@ -28,6 +28,41 @@ class MarkerObservation(NamedTuple):
     position_body: Vec3  # 同一點換到機體座標系
 
 
+# ROS sensor_msgs/Image 的 encoding -> (每像素位元組數, R、G、B 各在第幾個位元組)
+_ENCODINGS = {
+    "mono8": (1, None),
+    "bgr8": (3, (2, 1, 0)),
+    "rgb8": (3, (0, 1, 2)),
+    "bgra8": (4, (2, 1, 0)),
+    "rgba8": (4, (0, 1, 2)),
+}
+
+
+def gray_from_raw(data, width: int, height: int, step: int, encoding: str):
+    """把 ROS 影像的原始位元組變成 height x width 的 uint8 灰階陣列；不認得或長度不對回 None。
+
+    不用 cv_bridge：使用者容器只 source 了 Melodic（Python 2 的 cv_bridge），自己轉最穩。
+    `step` 是每列的位元組數，可能比 寬 x 通道數 大（列尾填充）。
+    """
+    import numpy as np  # noqa: PLC0415 - 延後 import，理由同 _aruco
+
+    layout = _ENCODINGS.get(encoding)
+    if layout is None:
+        return None
+    channels, rgb = layout
+    if step < width * channels or len(data) < step * height:
+        return None
+    rows = np.frombuffer(data, dtype=np.uint8, count=step * height).reshape(height, step)
+    pixels = rows[:, : width * channels]
+    if rgb is None:
+        return pixels.copy()
+    pixels = pixels.reshape(height, width, channels).astype(np.float32)
+    gray = (
+        0.299 * pixels[:, :, rgb[0]] + 0.587 * pixels[:, :, rgb[1]] + 0.114 * pixels[:, :, rgb[2]]
+    )
+    return np.clip(np.rint(gray), 0, 255).astype(np.uint8)
+
+
 def _aruco():
     import cv2  # noqa: PLC0415 - 延後 import，沒有 OpenCV 的環境也能用其他模組
 
