@@ -47,6 +47,7 @@ Claude 與 Codex 都有三個標準 agent：planner、worker、reviewer。職責
 - 靜態檢查：`uv run ruff check . && uv run pyright && uv run vermin --target=3.6- --no-tips --violations src ros`
 - 測試（全部）：`uv run pytest`
 - 測試（單檔）：`uv run pytest tests/test_x.py`
+- 一次跑完上面全部：`scripts/check.sh`（推送前跑；`scripts/install-hooks.sh` 可把它掛成 pre-push hook）
 
 動到會進 `krpc_user/` 的程式時，另外在本機模擬器跑一次（`scripts/sim.sh run`）並附上結果；細節見 `docs/agents/dev-env.md`。
 

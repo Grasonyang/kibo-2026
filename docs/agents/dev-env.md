@@ -58,6 +58,9 @@ ROS 相關程式（要 `import rospy`、`krpc_ib2_msgs`）只能在模擬器的�
 
 `--locked` 在 `uv.lock` 與 `pyproject.toml` 不一致時會失敗，agent 因此不會悄悄改到鎖檔。
 
+`scripts/check.sh` 一次跑完安裝、格式、靜態檢查與全部測試，任何一步失敗就停；改上面的指令時要一起改它。
+`scripts/install-hooks.sh` 把它掛成這個 clone 的 pre-push hook（選用，`--remove` 還原）。
+
 另有一道不在上面的關卡：改了會進 `krpc_user/` 的程式，交付前要在本機模擬器跑一次（`scripts/sim.sh run`），把分數與 `share/logs/latest/` 的結論貼進交付報告。提交前一定要在 Web 模擬器的「Preliminary」跑到 `FINISHED`（規則書 3.1）。
 
 ## 本機模擬器
