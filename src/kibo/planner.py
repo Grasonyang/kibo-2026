@@ -5,19 +5,23 @@
 動態規劃（狀態 = 已拜訪集合 × 目前所在點，2^11 × 11）在零點幾秒內就能算出最佳解。
 中途點超過 11 個是規則外的情況，為了不炸掉改用最近鄰當退路。
 
-成本不只是距離：IB2 到每一點都要轉到指定姿態，轉得越多越花時間。所以一段路的
-成本 = 距離 / 線速度 + 轉角 / 角速度，單位是秒。速度參數是估計值，拿到模擬器後校正。
+成本是秒數，由 `kibo.motion` 的移動時間模型算：先平移再轉向、短程看加速度、
+加速度看機體方向。同一段位移從不同的點出發成本不同，所以成本矩陣不對稱，
+Held-Karp 照樣能解。
 """
 
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from kibo.checkpoints import Checkpoint
-from kibo.geometry import Quat, Vec3, distance, quat_angle
+from kibo.geometry import Quat, Vec3
+from kibo.motion import DEFAULT_MOTION, MotionModel, move_seconds
 
 
 class Speeds(NamedTuple):
-    linear_mps: float = 0.1  # 公尺／秒，保守估計
-    angular_dps: float = 15.0  # 度／秒
+    """規劃用的節奏：移動時間模型，乘上「實際比模型慢幾倍」。"""
+
+    slowdown: float = 1.0  # 1.0 = 照模型；任務中若實測比模型慢，會把它往上調
+    motion: MotionModel = DEFAULT_MOTION
 
 
 DEFAULT_SPEEDS = Speeds()
@@ -40,9 +44,7 @@ class Route(NamedTuple):
 def leg_seconds(
     from_pos: Vec3, from_att: Quat, to_pos: Vec3, to_att: Quat, speeds: Speeds = DEFAULT_SPEEDS
 ) -> float:
-    travel = distance(from_pos, to_pos) / speeds.linear_mps
-    turn = quat_angle(from_att, to_att) / speeds.angular_dps
-    return travel + turn
+    return speeds.slowdown * move_seconds(from_pos, from_att, to_pos, to_att, speeds.motion)
 
 
 CostFn = Callable[[Vec3, Quat, Vec3, Quat], float]

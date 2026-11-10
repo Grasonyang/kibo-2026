@@ -1,10 +1,12 @@
+import pytest
+
 from kibo.budget import BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint
 from kibo.geometry import IDENTITY_QUAT
-from kibo.planner import Speeds
 
-ONE_METRE_PER_SEC = Speeds(linear_mps=1.0, angular_dps=1000.0)
-CONFIG = BudgetConfig(settle_sec=5.0, margin_sec=10.0, speeds=ONE_METRE_PER_SEC)
+# 預設的移動時間模型：沿機體 X 軸 1 m 是 2√(1/0.022511) = 13.33 秒；
+# 沿 Y 軸 10 m 是 10/0.2 + 0.2/0.012382 = 66.15 秒。
+CONFIG = BudgetConfig(settle_sec=5.0, margin_sec=10.0)
 
 
 def cp(cp_id, position):
@@ -23,15 +25,15 @@ def test_everything_fits_when_time_is_plentiful():
     )
     assert plan.route.order == [1, 2, 9]
     assert plan.dropped == []
-    # 1 + 1 + 1 公尺 = 3 秒，加三個點各 5 秒穩定 = 18 秒
-    assert plan.estimated_sec == 18.0
+    # 三段各 1 公尺 = 3 x 13.33 秒，加三個點各 5 秒穩定
+    assert plan.estimated_sec == pytest.approx(3 * 13.33 + 15.0, abs=0.05)
 
 
 def test_far_detour_is_dropped_first_when_short_on_time():
-    # 點 1 在順路上，點 2 要繞 10 公尺；時間只夠其中一個。
+    # 點 1 在順路上（來回 26.7 秒），點 2 要繞 10 公尺（單程 66 秒）；時間只夠其中一個。
     waypoints = [cp(1, (1.0, 0.0, 0.0)), cp(2, (0.0, 10.0, 0.0))]
     plan = plan_within_budget(
-        START, IDENTITY_QUAT, waypoints, GOAL, remaining_sec=30.0, config=CONFIG
+        START, IDENTITY_QUAT, waypoints, GOAL, remaining_sec=60.0, config=CONFIG
     )
     assert plan.dropped == [2]
     assert plan.route.order == [1, 9]

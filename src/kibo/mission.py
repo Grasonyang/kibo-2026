@@ -100,10 +100,10 @@ class MissionConfig(NamedTuple):
     camera_fix_max_m: float = (
         0.0  # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
     )
-    calibrate_speed: bool = True  # 用實測的移動速度修正時間預算（只往慢的方向）
-    min_speed_ratio: float = 0.5  # 校正後的速度不低於預設的這個比例
-    calibrate_below_ratio: float = 0.8  # 實測比預設慢超過這個比例才校正；實測含起停，略慢是正常
-    calibrate_min_leg_m: float = 1.0  # 只用這麼長以上的腿校正；短腿的秒數被起停吃掉，不反映速度
+    calibrate_speed: bool = True  # 用實測的移動秒數修正時間預算（只往慢的方向）
+    min_speed_ratio: float = 0.5  # 校正的上限：最多當作比模型慢 1/0.5 = 2 倍
+    calibrate_below_ratio: float = 0.8  # 死區：實測在模型的 1/0.8 = 1.25 倍以內不校正
+    calibrate_min_leg_m: float = 0.5  # 只用這麼長以上的腿校正
     # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
     notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
     skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
@@ -201,7 +201,10 @@ class _Run:
         return 1 if self.remaining() < self.cfg.hurry_sec else self.cfg.target_level
 
     def move_timeout(self, target: Optional[Pose] = None) -> float:
-        """至少 move_timeout_sec，長腿放大到估計秒數的兩倍；不超過剩餘時間，但最少 5 秒。"""
+        """至少 move_timeout_sec，長腿放大到估計秒數的三倍；不超過剩餘時間，但最少 5 秒。
+
+        三倍：校正最多只認「慢 2 倍」，逾時要比那更寬，否則慢 2 倍多的機器人
+        每段長腿都會被自己取消。"""
         timeout = self.cfg.move_timeout_sec
         if target is not None and self.last_pose is not None:
             estimate = leg_seconds(
@@ -211,7 +214,7 @@ class _Run:
                 target.orientation,
                 self.speeds,
             )
-            timeout = max(timeout, 2.0 * estimate)
+            timeout = max(timeout, 3.0 * estimate)
         return max(5.0, min(timeout, self.remaining()))
 
     def record_leg(
@@ -222,9 +225,9 @@ class _Run:
         逾時的腿也算證據：實際秒數至少是逾時值，所以算出來的「慢幾倍」是下界，
         只會把速度往慢修，方向安全；沒有它，比假設慢很多的機器人會一直逾時、永遠學不到。
 
-        比的是「模型預測的秒數」對「實際秒數」，所以轉向多的腿不會被誤判成飛得慢。
-        實際比預測慢超過死區才動，而且只往慢修、不低於預設的一半；短腿不算，
-        因為起停時間會把它的秒數撐大。
+        比的是「模型預測的秒數」對「實際秒數」。模型在本機模擬器上每段腿只差一兩秒，
+        所以這是保險：Web 模擬器或實機若整體比較慢，實測會把規劃用的秒數等比例放大。
+        慢超過死區才動，只往慢修，最多 2 倍；很短的腿不算（一兩秒的誤差佔比太大）。
         """
         if start is None or seconds <= 0.0:
             return
@@ -253,11 +256,11 @@ class _Run:
         if slowdown <= 1.0 / self.cfg.calibrate_below_ratio:
             slowdown = 1.0  # 在死區內：用預設值（已校正過的也拉回預設，不留棘輪）
         slowdown = min(slowdown, 1.0 / self.cfg.min_speed_ratio)
-        calibrated = Speeds(default.linear_mps / slowdown, default.angular_dps / slowdown)
-        if abs(calibrated.linear_mps - self.speeds.linear_mps) > 1e-9:
+        calibrated = default._replace(slowdown=default.slowdown * slowdown)
+        if abs(calibrated.slowdown - self.speeds.slowdown) > 1e-9:
             self.log(
-                "speed calibrated: %.3f -> %.3f m/s (x%.2f vs model, over %.0fs of legs)"
-                % (self.speeds.linear_mps, calibrated.linear_mps, slowdown, self.predicted_sec)
+                "speed calibrated: slowdown %.2f -> %.2f (x%.2f vs model, over %.0fs of legs)"
+                % (self.speeds.slowdown, calibrated.slowdown, slowdown, self.predicted_sec)
             )
             self.speeds = calibrated
 

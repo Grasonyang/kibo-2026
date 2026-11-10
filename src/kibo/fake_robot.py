@@ -1,7 +1,8 @@
 """假機器人：在沒有模擬器的電腦上把整場任務跑完。
 
-它不是物理模擬，只是「等速移動、到點有誤差、偶爾失敗」的簡化模型，外加一個
-照規則書判定等級的假裁判。用途是比較策略（例如時間預算的參數）與測試流程不卡死；
+它不是物理模擬：移動秒數直接用 `kibo.motion` 的模型算（可以乘一個 slowdown 假裝比較慢），
+到點有一點誤差、偶爾失敗，外加一個照官方 judge.py 判定等級的假裁判。
+用途是比較策略（例如時間預算的參數）與測試流程不卡死；
 分數只能相對比較，不能拿來預測真實成績。
 """
 
@@ -10,7 +11,7 @@ import random
 from typing import List, NamedTuple, Optional
 
 from kibo.checkpoints import CheckpointSet, parse_checkpoints
-from kibo.geometry import Quat, Vec3, add, norm, normalize, quat_mul, quat_normalize, rotate
+from kibo.geometry import Quat, Vec3, add, normalize, quat_mul, quat_normalize, rotate
 from kibo.judge import Pose, judge
 from kibo.mission import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT, Robot
 from kibo.planner import Speeds, leg_seconds
@@ -19,10 +20,10 @@ from kibo.vision import expected_marker_in_body
 
 
 class FakeRobotConfig(NamedTuple):
-    speeds: Speeds = Speeds(linear_mps=0.12, angular_dps=20.0)  # 真實速度，可與規劃假設不同
-    move_overhead_sec: float = 3.0  # 每次移動的起停時間
-    position_noise_m: float = 0.03  # 到點後的位置誤差（標準差）
-    attitude_noise_deg: float = 2.0  # 到點後的姿態誤差（標準差）
+    speeds: Speeds = Speeds()  # 真實的節奏；slowdown 設成 2 就是「比模型慢一倍的機器人」
+    move_overhead_sec: float = 0.0  # 每次移動額外多花的秒數（模型沒算到的）
+    position_noise_m: float = 0.01  # 到點後的位置誤差（標準差）；模擬器實測約 1 cm
+    attitude_noise_deg: float = 1.0  # 到點後的姿態誤差（標準差）；模擬器實測約 1°
     nav_jitter_m: float = 0.005  # 每次讀取位置的抖動
     move_fail_prob: float = 0.0
     checkpoints_fail_times: int = 0  # 前幾次 get_checkpoints 故意失敗
@@ -118,7 +119,11 @@ class FakeRobot(Robot):
 
     def move_relative(self, delta: Vec3, timeout_sec: float) -> str:
         self.relative_calls += 1
-        self.t += self.cfg.move_overhead_sec + norm(delta) / self.cfg.speeds.linear_mps
+        here = self.true_pose
+        there = add(here.position, rotate(here.orientation, delta))
+        self.t += self.cfg.move_overhead_sec + leg_seconds(
+            here.position, here.orientation, there, here.orientation, self.cfg.speeds
+        )
         shift = rotate(self.true_pose.orientation, delta)
         self.true_pose = Pose(add(self.true_pose.position, shift), self.true_pose.orientation)
         return MOVE_SUCCESS

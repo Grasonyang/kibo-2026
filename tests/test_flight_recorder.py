@@ -63,18 +63,18 @@ def test_deliberate_late_probe_finishes_after_the_limit(three_point_message):
     assert robot.finished_at is not None and robot.finished_at > TIME_LIMIT_SEC
 
 
-def test_log_has_per_leg_seconds_that_reproduce_the_fake_speed(three_point_message):
+def test_log_has_distance_turn_and_seconds_for_every_leg(three_point_message):
     import re
 
     robot = FakeRobot(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)
-    legs = [re.search(r"leg: ([\d.]+)m in ([\d.]+)s", line) for line in robot.logs]
+    legs = [re.search(r"leg: ([\d.]+)m (\d+)deg in ([\d.]+)s", line) for line in robot.logs]
     legs = [m for m in legs if m]
     assert len(legs) == 3
     for m in legs:
-        metres, seconds = float(m.group(1)), float(m.group(2))
-        # 假機器人 0.12 m/s 加 3 秒起停：實測速度在 0.03 到 0.12 之間
-        assert 0.03 < metres / seconds <= 0.12
+        metres, seconds = float(m.group(1)), float(m.group(3))
+        # 上限速度 0.2 m/s，短腿加減速加轉向後平均慢很多
+        assert 0.01 < metres / seconds <= 0.2
     assert any("nav_age=" in line for line in robot.logs)
 
 

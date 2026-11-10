@@ -21,8 +21,8 @@ from kibo.planner import DEFAULT_SPEEDS, Route, Speeds, leg_seconds, plan_route
 
 
 class BudgetConfig(NamedTuple):
-    settle_sec: float = 8.0  # 每個點到位後穩定並等伺服器判定的時間
-    margin_sec: float = 25.0  # 留給 Goal 與完成回報的保險
+    settle_sec: float = 1.5  # 每個點到位後自判穩定 1 秒加送通知；模擬器實測約 1.0 秒
+    margin_sec: float = 15.0  # 保險：模型每段腿約 ±1.6 秒，12 段累積約 ±6 秒，再留完成回報的時間
     speeds: Speeds = DEFAULT_SPEEDS
     allow_drop: bool = True  # False 只用來做對照（tune 的「不刪點」變體），比賽不要關
 
