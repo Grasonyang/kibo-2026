@@ -1,0 +1,34 @@
+# 每個 PR 與 main 的 push 都跑 AGENTS.md 的「驗證指令」。指令要與那一節逐字相同。
+# 本機模擬器（Docker、一場七分鐘）不在這裡跑；那一關由作者在本機跑，結果貼進 PR。
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.15"
+          enable-cache: true
+      - name: 安裝
+        run: uv sync --locked
+      - name: 格式
+        run: uv run ruff format --check .
+      - name: 靜態檢查
+        run: uv run ruff check . && uv run pyright && uv run vermin --target=3.6- --no-tips --violations src ros
+      - name: 測試
+        run: uv run pytest
