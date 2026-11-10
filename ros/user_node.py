@@ -69,7 +69,8 @@ ACTION_SERVER_TIMEOUT_SEC = 10.0
 NOTIFY_TIMEOUT_SEC = 15.0
 CANCEL_WAIT_SEC = 5.0
 NAV_FRESH_SEC = 1.0  # 導航資料比這舊就當作沒有
-NAV_HISTORY_LEN = 64  # 導航約 13 Hz，64 筆約 5 秒，夠看「到點前最後 1 秒」
+NAV_HISTORY_STEP_SEC = 0.05  # 導航實測約 200 Hz；紀錄降到 20 Hz 就夠判斷「到點前最後 1 秒」
+NAV_HISTORY_LEN = 64  # 20 Hz x 64 筆，約 3 秒
 IMAGE_FRESH_SEC = 1.0
 POLL_SEC = 0.2
 EVENT_NODE = "/krpc_api_node"  # 官方的事件 API 節點
@@ -87,7 +88,7 @@ class RosRobot(Robot):
         self._nav = None  # 最新的 Navigation 訊息
         self._nav_history = collections.deque(maxlen=NAV_HISTORY_LEN)  # 最近幾秒的 Pose
         self._nav_count = 0
-        self._init_time = rospy.get_time()
+        self._nav_first_stamp = None  # 第一筆導航的 stamp，算頻率用
         self._nav_lock = threading.Lock()
         self._stop = threading.Event()
         self._active_lock = threading.Lock()
@@ -305,13 +306,18 @@ class RosRobot(Robot):
         ]
 
     def _on_nav(self, msg):
-        p = msg.pose.pose.position
-        q = msg.pose.pose.orientation
-        pose = Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=msg.pose.header.stamp.to_sec())
+        stamp = msg.pose.header.stamp.to_sec()
         with self._nav_lock:
             self._nav = msg
             self._nav_count += 1
-            self._nav_history.append(pose)
+            if self._nav_first_stamp is None:
+                self._nav_first_stamp = stamp
+            history = self._nav_history
+            if history and 0.0 <= stamp - history[-1].stamp < NAV_HISTORY_STEP_SEC:
+                return  # 這個 callback 一秒跑 200 次，大部分在這裡就結束
+            p = msg.pose.pose.position
+            q = msg.pose.pose.orientation
+            history.append(Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=stamp))
 
     def _on_image(self, msg):
         with self._image_lock:
@@ -339,7 +345,7 @@ class RosRobot(Robot):
             self._ctl_type = new_type
 
     def survey(self):
-        """只印資料、不阻塞、不丟例外：nav 頻率（從節點啟動到現在）、stamp、status、
+        """只印資料、不阻塞、不丟例外：nav 頻率（第一筆到最新一筆）、stamp、status、
         camera_info、影像 encoding、sim time。失敗只 log，絕不影響任務。"""
         try:
             self._survey()
@@ -348,8 +354,11 @@ class RosRobot(Robot):
 
     def _survey(self):
         with self._nav_lock:
-            nav, count = self._nav, self._nav_count
-        window = max(rospy.get_time() - self._init_time, 1e-3)
+            nav, count, first = self._nav, self._nav_count, self._nav_first_stamp
+        # 用導航自己的 stamp 算頻率：節點剛啟動時模擬時鐘可能還是 0，不能拿啟動時刻當起點。
+        window = 1e-3
+        if nav is not None and first is not None:
+            window = max(nav.pose.header.stamp.to_sec() - first, 1e-3)
         rospy.loginfo(
             "[survey] use_sim_time=%s now=%.3f nav_msgs=%d over %.1fs (%.1f Hz)",
             rospy.get_param("/use_sim_time", False),
