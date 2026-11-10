@@ -58,6 +58,9 @@ ROS 相關程式（要 `import rospy`、`krpc_ib2_msgs`）只能在模擬器的�
 
 `--locked` 在 `uv.lock` 與 `pyproject.toml` 不一致時會失敗，agent 因此不會悄悄改到鎖檔。
 
+CI（`.github/workflows/check.yml`）在每個 PR 與 main 的 push 上跑上面的安裝、格式、靜態檢查與全部測試，
+指令與這一節逐字相同；改這裡的指令時要一起改 workflow。CI **不跑**本機模擬器。
+
 另有一道不在上面的關卡：改了會進 `krpc_user/` 的程式，交付前要在本機模擬器跑一次（`scripts/sim.sh run`），把分數與 `share/logs/latest/` 的結論貼進交付報告。提交前一定要在 Web 模擬器的「Preliminary」跑到 `FINISHED`（規則書 3.1）。
 
 ## 本機模擬器
