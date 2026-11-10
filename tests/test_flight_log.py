@@ -1,4 +1,5 @@
-"""R4：校準與飛行記錄——穩定判定只計新資料、探針旗標、沒成功移動不回報、log 可算速度。"""
+"""任務留下的 log 與探針旗標（council R4 的「飛行記錄」）：穩定判定只計新資料、沒成功移動不回報、
+log 裡有每段腿的距離與秒數、探針旗標預設全關、報表工具認得 log 的格式。"""
 
 from conftest import PERFECT
 from kibo.fake_robot import FakeRobot

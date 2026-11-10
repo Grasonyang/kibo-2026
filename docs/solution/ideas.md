@@ -27,6 +27,7 @@
 已完成：`src/kibo/vision.py`（偵測、`solvePnP` 位姿、相機到機體座標換算、預期位置、修正量），
 同時支援 OpenCV 3.x 與 4.7+ 的 ArUco API，用合成影像測到 5 mm 內（`tests/test_vision.py`）。
 已接線：`Robot` 多了兩個選用方法 `marker_in_body`、`move_relative`；`mission.visit` 在 settle 不穩定時先試相機修正
+（2026-11-10 上機後：相機修正預設關，每點只記一行相機與導航的比對；原因見 `docs/kibo/simulator-internals.md` 的 E6。）
 （修正量 ≤ 0.3 m 才信），不行才再絕對移動一次。假機器人有假相機，`--camera` 可開；ROS 端訂閱 `/camera_main/*`，
 不用 cv_bridge，直接 numpy 轉灰階。
 代價：影像延遲、要先確認伺服器判定到底用哪個座標、字典是不是 `DICT_4X4_50`、ROS 端未測。
@@ -60,7 +61,7 @@ marker 1（SAIBO，z 0.681）與 7（MELFI1，z 0.372）在同一面牆、x 相�
 代價：只是分析。
 
 ### 7. 把 `judge` 的視差假設做成開關——已做
-`MissionConfig.camera_offset_m` 預設 `(0.14, 0, 0)`；若模擬器顯示伺服器用機體中心算對中，改成 `(0, 0, 0)`。
+（已解決：官方 `judge.py` 的對中從機體中心量，`camera_offset_m` 這個開關已移除。）
 
 ## 不打算做的
 

@@ -51,7 +51,7 @@
 - **`Robot` 介面**（抽象類別）：八個必要方法 `now`、`pose`（沒資料回 None）、`move_to(pose, timeout) -> 字串常數 MOVE_SUCCESS/TIMEOUT/ABORTED/INVALID`、`sleep`、`mission_start`、`get_checkpoints_message`、`notify_checkpoint`、`mission_finish`，加兩個選用 `stop_requested`、`log`。ROS 版與假機器人版各實作一次。ROS 版的服務呼叫放在 daemon thread 裡用 Event 等，因為 `ServiceProxy` 本身沒有逾時。
 - **假機器人**：等速直線加等角速度轉動的簡化模型，可注入位置雜訊與偶發失敗，並依 bands 判 Lv 算分，讓策略比較有數字可看。它不是物理模擬，分數只能做相對比較。
 - **ROS 接線層**：照官方範本結構（`/ib2_user/start`、`/ib2_user/stop`、`/ib2_user/ready` 保留），`Robot` 的每個方法對應一個 action 或 service，全部有逾時與取消。
-- **影像（第二版，已接線、ROS 端未測）**：主流程仍靠導航資料。只有在 settle 不穩定時，若 `Robot.marker_in_body` 回得出該 marker 在機體座標系的位置，就把它和「站在目標姿態時應看到的位置」相減得到修正量，小於 0.3 m 才用 `move_relative`（`MOVE_TO_RELATIVE_TARGET`，姿態不變）修正；否則退回再做一次絕對移動。沒有相機的 `Robot` 不實作這兩個方法即可（預設回 None／`MOVE_INVALID`）。ArUco 細節：字典假設 `DICT_4X4_50`、邊長 0.02 m、位姿用 `solvePnP`，同時支援 OpenCV 3.x 與 4.7+。
+- **影像（只記錄）**：主流程靠導航資料，官方評分也是用導航的姿態。每到一點，若 `Robot.marker_in_body` 回得出該 marker 在機體座標系的位置，就記一行它與導航預期位置的差（`MissionConfig.log_marker`），不拿來移動。「用相機修正幾公分」的路徑還在（`camera_fix_max_m`，預設 0 = 關）：本機模擬器裡相機換算的深度與導航差約 15 cm，而導航誤差只有 1 cm，開了只會變差。
 - **Log**：每個階段一行，開頭固定是剩餘秒數，後面是階段與數字（路線與估時、移動結果、三項指標與 Lv、是否穩定、回報結果）。
 
 ## 測試決策

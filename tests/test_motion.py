@@ -7,6 +7,7 @@ import math
 
 import pytest
 
+from kibo.geometry import IDENTITY_QUAT
 from kibo.motion import (
     DEFAULT_MOTION,
     bang_bang_seconds,
@@ -15,8 +16,7 @@ from kibo.motion import (
     move_seconds,
 )
 
-IDENTITY = (0.0, 0.0, 0.0, 1.0)
-S = math.sqrt(0.5)
+S = math.sqrt(0.5)  # sin(45°) = cos(45°)，90° 旋轉的四元數分量
 
 
 def test_acceleration_along_each_body_axis():
@@ -56,8 +56,8 @@ def test_zero_amount_takes_no_time():
 
 
 def test_moving_sideways_takes_longer_than_moving_forward():
-    forward = move_seconds((0.0, 0.0, 0.0), IDENTITY, (1.0, 0.0, 0.0), IDENTITY)
-    sideways = move_seconds((0.0, 0.0, 0.0), IDENTITY, (0.0, 1.0, 0.0), IDENTITY)
+    forward = move_seconds((0.0, 0.0, 0.0), IDENTITY_QUAT, (1.0, 0.0, 0.0), IDENTITY_QUAT)
+    sideways = move_seconds((0.0, 0.0, 0.0), IDENTITY_QUAT, (0.0, 1.0, 0.0), IDENTITY_QUAT)
     overhead = DEFAULT_MOTION.overhead_sec
     assert forward - overhead == pytest.approx(2.0 * math.sqrt(1.0 / 0.022511), abs=1e-2)
     assert sideways - overhead == pytest.approx(2.0 * math.sqrt(1.0 / 0.012382), abs=1e-2)
@@ -67,14 +67,14 @@ def test_the_same_displacement_costs_differently_depending_on_start_attitude():
     # 起點姿態繞 Z 轉 90°：世界 +X 的位移在機體座標是 -Y（側向），比較慢。
     yawed = (0.0, 0.0, S, S)
     assert move_seconds((0.0, 0.0, 0.0), yawed, (1.0, 0.0, 0.0), yawed) > move_seconds(
-        (0.0, 0.0, 0.0), IDENTITY, (1.0, 0.0, 0.0), IDENTITY
+        (0.0, 0.0, 0.0), IDENTITY_QUAT, (1.0, 0.0, 0.0), IDENTITY_QUAT
     )
 
 
 def test_translation_and_rotation_add_up_because_they_run_one_after_the_other():
     yaw_90 = (0.0, 0.0, S, S)
-    both = move_seconds((0.0, 0.0, 0.0), IDENTITY, (1.0, 0.0, 0.0), yaw_90)
-    only_move = move_seconds((0.0, 0.0, 0.0), IDENTITY, (1.0, 0.0, 0.0), IDENTITY)
+    both = move_seconds((0.0, 0.0, 0.0), IDENTITY_QUAT, (1.0, 0.0, 0.0), yaw_90)
+    only_move = move_seconds((0.0, 0.0, 0.0), IDENTITY_QUAT, (1.0, 0.0, 0.0), IDENTITY_QUAT)
     # 繞 Z 轉 90°：w²/α = 0.79 rad < 1.57 rad，會巡航：θ/w + w/α
     turn = (math.pi / 2.0) / 0.436332313 + 0.436332313 / 0.240891
     assert both - only_move == pytest.approx(turn, abs=1e-2)
@@ -83,6 +83,6 @@ def test_translation_and_rotation_add_up_because_they_run_one_after_the_other():
 def test_q_and_minus_q_are_the_same_target():
     yaw_90 = (0.0, 0.0, S, S)
     negated = (0.0, 0.0, -S, -S)
-    a = move_seconds((0.0, 0.0, 0.0), IDENTITY, (0.0, 0.0, 0.0), yaw_90)
-    b = move_seconds((0.0, 0.0, 0.0), IDENTITY, (0.0, 0.0, 0.0), negated)
+    a = move_seconds((0.0, 0.0, 0.0), IDENTITY_QUAT, (0.0, 0.0, 0.0), yaw_90)
+    b = move_seconds((0.0, 0.0, 0.0), IDENTITY_QUAT, (0.0, 0.0, 0.0), negated)
     assert a == pytest.approx(b)

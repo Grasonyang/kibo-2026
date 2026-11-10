@@ -85,9 +85,11 @@ uv run python -m kibo.tune --runs 20 --checkpoints 10           # 幾種參數�
 [t=0.0  300.0s left] route [10, 5, 3, 2, 1, 12] (~198s)          ← 排好順序，估計 198 秒
 [t=51.5  248.5s left] move to #10 attempt 1: success
 [t=51.5  248.5s left] leg: 5.72m 145deg in 51.5s (model 51.5s)   ← 這段腿的實際秒數對模型
-[t=52.5  247.5s left] at #10: dist=0.02m centering=1.7 roll=0.3 -> Lv3 (stable)   ← 自判三項，連續達標
-[t=52.8  247.2s left] checkpoint #10 accepted                    ← 通知送出（accepted 不代表通過）
-[t=52.8  247.2s left] route [5, 3, 2, 1, 12] (~146s)             ← 每到一點重新規劃
+[t=51.5  248.5s left] at #10: dist=0.02m centering=1.9 roll=0.3 -> Lv3 (stable) nav_age=0.05s
+                                                                 ← 自判三項；移動尾段已經穩了 1 秒，不用再等
+[t=51.8  248.2s left] checkpoint #10 accepted                    ← 通知送出（accepted 不代表通過）
+[t=51.8  248.2s left] marker #10 not seen                        ← 相機有沒有看到 marker（假機器人預設沒相機）
+[t=51.8  248.2s left] route [5, 3, 2, 1, 12] (~146s)             ← 每到一點重新規劃
 ```
 
 沒穩的時候會多兩行：`-> Lv2 (unstable)` 之後再 `move`，然後 `refined: at #12: ... -> Lv3 (stable)`。

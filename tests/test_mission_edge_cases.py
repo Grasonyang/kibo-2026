@@ -13,8 +13,9 @@ from kibo.mission import (
     MOVE_TIMEOUT,
     run_mission,
 )
+from kibo.simulate import CAMERA_FIX_MAX_M
 
-CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=0.3)
+CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=CAMERA_FIX_MAX_M)
 SIDEWAYS_15CM = (0.0, 0.15, 0.0)  # 機體 +Y，與視線垂直：位置 Lv2、對中約 17° 也是 Lv2
 LOST_35CM = (0.0, 0.0, 0.35)  # 超出最寬的位置餘裕
 
