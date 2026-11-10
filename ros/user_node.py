@@ -18,6 +18,7 @@ import collections
 import os
 import sys
 import threading
+import time
 import xmlrpc.client
 
 # kibo/ 由 scripts/sim.sh 同步到這個檔案旁邊。直接執行時 sys.path[0] 本來就是這裡；
@@ -49,7 +50,7 @@ from platform_msgs.msg import UserLogic
 from platform_msgs.srv import StopProcessingUserNode, StopProcessingUserNodeResponse
 from sensor_msgs.msg import CameraInfo, Image
 
-from kibo.buslinks import topic_has_listener
+from kibo.buslinks import missing_listeners, topic_parties
 from kibo.judge import Pose
 from kibo.mission import (
     DEFAULT_MISSION,
@@ -73,11 +74,12 @@ NAV_HISTORY_STEP_SEC = 0.05  # 導航實測約 200 Hz；紀錄降到 20 Hz 就�
 NAV_HISTORY_LEN = 64  # 20 Hz x 64 筆，約 3 秒
 IMAGE_FRESH_SEC = 1.0
 POLL_SEC = 0.2
-EVENT_NODE = "/krpc_api_node"  # 官方的事件 API 節點
-EVENT_TOPIC = "/gs/data"  # 它把 mission_start 等事件轉發到這個 topic，評分模組在聽
-EVENT_LISTENER_HINT = "judge"  # 要等的是評分模組（/kibo_rpc_judge），不是狀態顯示或飛行記錄
-EVENT_LINK_TIMEOUT_SEC = 10.0  # 等「有人在聽」的上限
-EVENT_LINK_MAX_POLLS = int(EVENT_LINK_TIMEOUT_SEC / POLL_SEC) + 2
+EVENT_SERVICE = "/event/mission_start"
+EVENT_TOPIC = "/gs/data"  # 官方的事件 API 把 mission_start 等事件轉發到這個 topic，評分模組在聽
+EVENT_WAIT_SEC = 10.0  # 等「訂閱者都連上」的上限（牆鐘）
+EVENT_QUERY_SEC = 2.0  # 問一次連線狀況的上限（牆鐘）；XMLRPC 本身沒有逾時
+EVENT_MAX_POLLS = int(EVENT_WAIT_SEC / POLL_SEC) + 2
+EVENT_ABSENT_POLLS = 3  # 連續這麼多次都沒有人發佈 EVENT_TOPIC，才認定這裡沒有這種接法
 
 ACTION_DONE = "done"
 ACTION_TIMEOUT = "timeout"
@@ -178,7 +180,7 @@ class RosRobot(Robot):
         return MOVE_ABORTED
 
     def mission_start(self):
-        self._wait_for_event_listener()
+        self._wait_for_event_listeners()
         res = self._call(self._mission_start, "/event/mission_start")
         return bool(res is not None and res.success)
 
@@ -257,54 +259,89 @@ class RosRobot(Robot):
                 rospy.logwarn("cancel failed: %s", exc)
 
     # ---- 內部 ----
-    def _wait_for_event_listener(self):
-        """等到事件 topic 真的有人連上，再送任務開始；有上限，查不到就不等。
+    def _wait_for_event_listeners(self):
+        """等到事件 topic 的訂閱者都連上，再送任務開始。有牆鐘上限；這裡沒有這種接法就不等。
 
-        為什麼：官方的事件 API 節點把 mission_start 轉發到一個沒有 latch 的 topic，評分模組
-        要連上才收得到。API 節點與我們同時啟動，我們若在評分模組連上之前就呼叫 mission_start，
-        「開始」會遺失，之後整場的通過通知與完成回報都被評分模組當成「任務還沒開始」丟掉。
-        2026-11-10 本機模擬器實際發生過（起跑後 1.3 秒就呼叫，整場沒有成績）。
+        為什麼：官方的事件 API 節點把 mission_start 轉發到一個沒有 latch 的 topic（EVENT_TOPIC），
+        評分模組要連上才收得到。API 節點與我們同時啟動；我們若在評分模組連上之前就呼叫
+        mission_start，「開始」會遺失，之後整場的通過通知與完成回報都被評分模組當成
+        「任務還沒開始」丟掉。2026-11-10 本機模擬器實際發生過兩次（整場沒有成績）。
         官方範本沒中，只是因為它被 DNS 延遲拖了 5 秒。
-        這段等待在任務開始之前，不算在評分模組的任務時間內。"""
-        started = rospy.get_time()
-        links = []
-        for _ in range(EVENT_LINK_MAX_POLLS):
-            try:
-                links = self._event_topic_links()
-            except Exception as exc:  # 查不到（例如實機沒有這個節點）就不等
-                rospy.loginfo("event listener check unavailable (%s); not waiting", exc)
-                return
-            if topic_has_listener(links, EVENT_TOPIC, must_contain=EVENT_LISTENER_HINT):
-                rospy.loginfo(
-                    "event listener connected after %.1fs: %s",
-                    rospy.get_time() - started,
-                    [str(link[1]) for link in links],
-                )
-                return
-            if self.stop_requested() or rospy.get_time() - started > EVENT_LINK_TIMEOUT_SEC:
+
+        規則不認節點名字：master 登記的訂閱者全部都和發佈者連上了，就出發。
+        這段等待用牆鐘計時（模擬時鐘停住也不會卡住），最多 EVENT_WAIT_SEC；等不到照樣出發，
+        因為不出發一定 0 分。等待的秒數算在我們自己的時間預算裡（保守，見 kibo.mission 的 t0）。"""
+        try:
+            # 服務出現之後，API 節點的發佈者一定已經登記（它先建 publisher 才建 service）。
+            rospy.wait_for_service(EVENT_SERVICE, timeout=SERVICE_TIMEOUT_SEC)
+        except rospy.ROSException as exc:
+            rospy.logerr("%s unavailable: %s", EVENT_SERVICE, exc)
+            return
+        started = time.time()
+        absent = 0
+        status = None
+        for _ in range(EVENT_MAX_POLLS):
+            status = self._bounded(self._event_listener_status, EVENT_QUERY_SEC)
+            if status is not None:
+                publishers, missing = status
+                if publishers and not missing:
+                    rospy.loginfo("event listeners connected after %.1fs", time.time() - started)
+                    return
+                absent = 0 if publishers else absent + 1
+                if absent >= EVENT_ABSENT_POLLS:
+                    rospy.loginfo("nobody publishes %s here; not waiting", EVENT_TOPIC)
+                    return
+            if self.stop_requested() or time.time() - started > EVENT_WAIT_SEC:
                 break
-            rospy.sleep(POLL_SEC)
+            time.sleep(POLL_SEC)
         rospy.logwarn(
-            "no listener on %s after %.1fs (links: %s); starting anyway",
+            "listeners on %s not all connected after %.1fs (last status: %s); starting anyway",
             EVENT_TOPIC,
-            rospy.get_time() - started,
-            links,
+            time.time() - started,
+            status,
         )
 
     @staticmethod
-    def _event_topic_links():
-        """事件 API 節點在 EVENT_TOPIC 上的連線清單（ROS slave API 的 getBusInfo）。"""
+    def _event_listener_status():
+        """回傳 (EVENT_TOPIC 的發佈者, 還沒連上任何一個發佈者的訂閱者)。
+
+        問 master 誰發誰訂（getSystemState），再問每個發佈者它的連線（slave API 的 getBusInfo）。
+        這幾個 XMLRPC 呼叫都沒有逾時，所以一定要經過 `_bounded` 呼叫。"""
         caller = rospy.get_name()
-        uri = rosgraph.Master(caller).lookupNode(EVENT_NODE)
-        reply = xmlrpc.client.ServerProxy(uri).getBusInfo(caller)  # [狀態碼, 訊息, 連線清單]
-        if not isinstance(reply, (list, tuple)) or len(reply) < 3:
-            raise ValueError("unexpected getBusInfo reply: %r" % (reply,))
-        rows = reply[2] if isinstance(reply[2], (list, tuple)) else []
-        return [
-            row
-            for row in rows
-            if isinstance(row, (list, tuple)) and len(row) >= 5 and row[4] == EVENT_TOPIC
-        ]
+        master = rosgraph.Master(caller)
+        publishers, subscribers = topic_parties(master.getSystemState(), EVENT_TOPIC)
+        missing = []
+        for publisher in publishers:
+            reply = xmlrpc.client.ServerProxy(master.lookupNode(publisher)).getBusInfo(caller)
+            bus_info = reply[2] if isinstance(reply, (list, tuple)) and len(reply) >= 3 else None
+            missing.extend(missing_listeners(bus_info, EVENT_TOPIC, subscribers))
+        return publishers, missing
+
+    @staticmethod
+    def _bounded(function, wall_timeout_sec):
+        """在 daemon thread 裡呼叫 `function()`，最多等 wall_timeout_sec（牆鐘）。
+
+        回傳它的結果；逾時或丟例外回 None（例外記一行）。逾時時那個 thread 會留在背景，
+        不會擋住任務。"""
+        box = {}
+        done = threading.Event()
+
+        def worker():
+            try:
+                box["result"] = function()
+            except Exception as exc:  # 查詢失敗只是「不知道」，不能讓任務出事
+                box["error"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=worker, name="bounded", daemon=True).start()
+        if not done.wait(wall_timeout_sec):
+            rospy.logwarn("query did not answer within %.1fs", wall_timeout_sec)
+            return None
+        if "error" in box:
+            rospy.logwarn("query failed: %r", box["error"])
+            return None
+        return box.get("result")
 
     def _on_nav(self, msg):
         stamp = msg.pose.header.stamp.to_sec()
@@ -476,15 +513,12 @@ class RosRobot(Robot):
                     if client.get_state() == GoalStatus.REJECTED:
                         return ACTION_DONE, None
                     return ACTION_DONE, client.get_result()
-                if self.stop_requested():
+                if self.stop_requested() or rospy.get_time() > deadline:
                     break
-                if rospy.get_time() > deadline:
-                    client.cancel_goal()
-                    client.wait_for_result(rospy.Duration(CANCEL_WAIT_SEC))
-                    return ACTION_TIMEOUT, None
+            # 走到這裡有三種：收到停止、過了期限、輪詢次數用完。後兩種都是逾時。
             client.cancel_goal()
             client.wait_for_result(rospy.Duration(CANCEL_WAIT_SEC))
-            return ACTION_STOPPED, None
+            return (ACTION_STOPPED if self.stop_requested() else ACTION_TIMEOUT), None
         finally:
             with self._active_lock:
                 if client in self._active_goals:

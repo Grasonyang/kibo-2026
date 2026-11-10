@@ -25,6 +25,8 @@ from kibo.vision import body_correction, expected_marker_in_body
 
 ABORT_STOP = "stop requested"
 
+TOP_LEVEL = 3  # 最高的通過等級；notify_margin 的緩衝只在追求這一級時才有意義
+
 MOVE_SUCCESS = "success"
 MOVE_TIMEOUT = "timeout"
 MOVE_ABORTED = "aborted"
@@ -166,7 +168,10 @@ class _Run:
     def __init__(self, robot: Robot, config: MissionConfig) -> None:
         self.robot = robot
         self.cfg = config
-        self.t0 = robot.now()  # 假設：/ib2_user/start 到來時 Release 剛完成；待模擬器驗證
+        # 我們的時鐘從 /ib2_user/start 到來起算。評分模組記的任務時間是從它收到 mission_start 起算
+        # （docs/kibo/simulator-internals.md），比我們晚一點（起跑前最多等 10 秒確認它連上），
+        # 所以我們的剩餘時間只會偏少、不會偏多。Web 模擬器的時限若從起跑訊號算，這樣也安全。
+        self.t0 = robot.now()
         self.visits: List[Visit] = []
         self.dropped: List[int] = []
         self.last_pose: Optional[Pose] = None
@@ -319,13 +324,14 @@ class _Run:
     def good_enough(self, judgement: Judgement, cp: Checkpoint, strict: bool) -> bool:
         """這一筆判定夠不夠格算進「連續達標」。
 
-        一般標準是達到 required_level。`strict` 而且不趕時間時再加一條：三個量都要在 Lv3 上限的
-        notify_margin 以內。原因：官方判定用的姿態最多舊 0.2 秒，而 Goal 點（marker 12，視線
-        幾乎正對 -X）的滾轉讀數會把 1° 的指向誤差放大成 7° 左右，貼著 10° 回報很容易掉到 Lv2。"""
+        一般標準是達到 required_level。`strict` 而且要求的是最高級（Lv3）時再加一條：
+        三個量都要在 Lv3 上限的 notify_margin 以內。原因：官方判定用的姿態最多舊 0.2 秒，
+        而 Goal 點（marker 12，視線幾乎正對 -X）的滾轉讀數會把 1° 的指向誤差放大成 7° 左右，
+        貼著 10° 回報很容易掉到 Lv2。"""
         required = self.required_level()
         if judgement.level < required:
             return False
-        if strict and required >= self.cfg.target_level:
+        if strict and required >= TOP_LEVEL:
             return top_band_usage(judgement, cp) <= self.cfg.notify_margin
         return True
 

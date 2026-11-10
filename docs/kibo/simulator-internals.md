@@ -65,16 +65,27 @@ G2 加上 J4：保持伺服器給的姿態時，側向偏 8.8 cm 對中就掉到
 
 | # | 事實 | 證據 |
 |---|---|---|
-| E1 | **起跑太快，評分模組會漏掉「任務開始」，整場事件都被丟掉。** `krpc_api_node` 把事件轉發到沒有 latch 的 `/gs/data`，評分模組要先連上才收得到；它和使用者節點同時啟動 | 第六場：`judge.log` 每筆都是 `checkpoint event received before mission start`，沒有 `result.json`。API 節點啟動後 1.33 秒呼叫 `mission_start` 中了，1.15 秒那場沒中，2.6 秒以上都沒中 |
+| E1 | **起跑太快，評分模組會漏掉「任務開始」，整場事件都被丟掉。** `krpc_api_node` 把事件轉發到沒有 latch 的 `/gs/data`，評分模組要先連上才收得到；它和使用者節點同時啟動 | 場次 `20261110122717` 與 `20261110130057`：`judge.log` 每筆都是 `… event received before mission start`，沒有 `result.json`。前者是 API 節點啟動後 1.33 秒就呼叫 `mission_start`；隔 1.15 秒的另一場卻沒事，所以是機率性的。後者是飛行記錄與狀態顯示兩個節點先連上、評分模組還沒 |
 | E2 | 官方範本沒遇到 E1，是因為同一個容器裡的名稱查詢會卡 5 秒（E3），剛好把它擋住 | 同上；範本的流程與我們相同 |
 | E3 | 映像的 glibc 2.27 同時送 A 與 AAAA 查詢，Docker 內建 DNS 會丟一個回應，**每個執行緒**頭幾次查詢各卡 5 秒 | 12 個新容器各查 5 次：12 個都有一次卡 5 秒；設 `RES_OPTIONS=single-request` 後 0 次 |
 | E4 | `/sensor_fusion/navigation` 約 200 Hz，`header.stamp` 有值，比現在晚約 0.11 秒，frame 是 `iss_body`；`use_sim_time` 為真 | 節點的 `[survey]` 與尾段紀錄（64 筆只跨 0.33 秒） |
 | E5 | 影像 800x800、`rgb8`；`camera_info` 的焦距 476.7、主點 (400.5, 400.5)、沒有畸變 | `[survey]` |
 | E6 | `DICT_4X4_50` 偵測得到 marker（9 點裡 6 點看到）。用邊長 2 cm、相機在機頭前 0.14 m 換算，側向與導航一致，但**深度比導航多約 15 cm** | 每點的 `marker #n seen at body ...` |
 | E7 | 規則書附錄 #22 的 Microgravity module 不在下載包裡：`ENABLE_GRAVITY_MODULE` 只出現在 `docker-compose.yaml`，沒有任何程式讀它 | 對整個下載包與映像 `grep` |
+| E8 | **官方的滾轉量測在 Goal（marker 12）是病態的。** twist 角是 `2·atan2(q_vec·axis, q_w)`；機體朝世界 −X 看時姿態接近「繞垂直軸轉 180°」，分子分母都接近 0 | 模型：1.5° 的指向誤差加 6 mm 位置誤差、機體完全沒滾，marker 12 的讀數最大 16°，其他 marker 最大 2°（`tests/test_judge.py` 有對應測試）。實測：Goal 回報當下的讀數常在 5–9°，到位後會先衝到 13–18° 再降回來 |
+| E9 | 評分模組用的姿態比我們看到的舊（J2），所以自判與官方可能差一級 | 場次 `20261110131242`（hard）：Goal 自判 Lv2（滾轉 19.5°，機體還在轉），官方給 Lv1。其餘 60 幾個點自判與官方一致 |
+| E10 | 模擬器自己偶爾啟動失敗，機器人整場不受控 | 場次 `20261110130057`：`system.log` 有 `Sensors failed to initialize when loading model[ib2] … Plugins for the model will not be loaded`，機器人從 Dock 漂到 z=1.85 m |
 
-我們的對策：E1 → 起跑前用 `getBusInfo` 確認 `/gs/data` 有非 rosbag 的訂閱者連上，最多等 10 秒（`ros/user_node.py` 的
-`_wait_for_event_listener`）；E3 → 節點開頭設 `RES_OPTIONS`；E6 → 相機修正維持關閉。
+我們的對策：
+- E1 → 起跑前先等 `/event/mission_start` 服務出現，再問 master 誰發、誰訂 `/gs/data`，並問發佈者它的連線；
+  **登記的訂閱者全部連上**才送任務開始。不認節點名字，牆鐘上限 10 秒，沒有人發佈這個 topic（例如實機）就不等。
+  程式在 `ros/user_node.py` 的 `_wait_for_event_listeners`，判讀規則在 `src/kibo/buslinks.py`。
+- E3 → 節點開頭設 `RES_OPTIONS=single-request`。
+- E6 → 相機修正維持關閉；每點只記一行相機與導航的比對（`MissionConfig.log_marker`）。
+- E8、E9 → 這一點還有餘裕時，先等距離、對中、滾轉都在 Lv3 上限的八成以內才回報，最多多等 3 秒
+  （`MissionConfig.notify_margin`、`settle_strict_sec`）。「有沒有餘裕」看的是剩餘時間扣掉後面路線還要的秒數
+  （`_Run.slack`），不是剩餘時間的絕對值：到 Goal 時剩 26 秒其實很充裕。
+- E10 → 無法從我們這邊避免。`scripts/sim_report.py` 會把這種場次標成「無成績」，統計時要排除。
 
 ## 對 `questions-for-poc.md` 的影響
 

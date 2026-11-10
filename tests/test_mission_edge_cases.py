@@ -357,3 +357,17 @@ def test_a_reading_that_stays_near_the_edge_is_reported_after_a_few_seconds():
     assert [v.judged_level for v in report.visits] == [3, 3, 3]
     assert all(v.stable and v.notified for v in report.visits)
     assert robot.move_calls == 3  # 沒有為此多移動一次
+
+
+def test_the_level_3_buffer_does_not_apply_when_only_level_2_is_wanted():
+    # 只求 Lv2 的設定：停在 15°（Lv2）就該馬上算穩定，不該被「Lv3 上限的八成」擋住再等 3 秒。
+    message = _realistic_message()
+
+    class StaysAtLevel2(StillTurningRobot):
+        turning_sec = 1000.0
+
+    robot = StaysAtLevel2(message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION._replace(target_level=2))
+    assert [v.judged_level for v in report.visits] == [2, 2, 2]
+    assert all(v.stable for v in report.visits)
+    assert _seconds_between_arrival_and_report(robot, 12) < 2.0

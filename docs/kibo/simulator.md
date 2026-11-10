@@ -31,13 +31,14 @@
 | `src/kibo/` | `…/krpc_user/scripts/kibo/` | 任務邏輯；節點從自己旁邊 import |
 
 `scripts/sim.sh run` 與 `scripts/pack.sh` 每次都先同步，所以**以本 repo 為準**，不要直接改 `sim/` 裡的檔案。
+也因此 `krpc_user/` 不能單獨拿去建置：它的 `CMakeLists.txt` 列了 `scripts/user_node.py`，那個檔案要同步之後才在。
 `krpc_user/scripts/user_template.py` 是官方範例，原樣留著對照，不執行。
 
 ## 日常指令
 
 ```bash
 scripts/sim.sh build                 # 建 Docker image（aarch64 自動加 --arm64；第一次要從原始碼編 OpenCV，很久）
-scripts/sim.sh run                   # 同步後跑一場；畫面在 http://localhost:8080
+scripts/sim.sh run                   # 同步後跑一場；畫面在 http://localhost:8080（埠被占用就設 KIBO_SIM_PORT）
 LEVELS=veryhard scripts/sim.sh run   # 難度：easy 6 點、normal 8（預設）、hard 10、veryhard 12
 scripts/sim.sh replay                # 重播上一場（rosbag）
 scripts/pack.sh                      # 同步後打包成 dist/*.tar.gz，上傳 Web 模擬器

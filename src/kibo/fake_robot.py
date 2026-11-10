@@ -142,9 +142,13 @@ class FakeRobot(Robot):
         """假裁判，照官方 judge.py：通知一律被「接受」（回 True 不代表通過），
         而且**每個點只判第一次**，沒過也不能重來；判定用通知當下的真實姿態。"""
         self.t += self.cfg.notify_sec
+        if not self.started or self.finished_at is not None:
+            return True  # 任務開始前、完成回報後的通知，官方只記一行警告
         if checkpoint_id in self.judged_ids:
             return True  # 官方只記一行 "already processed"
         self.judged_ids.append(checkpoint_id)
+        if checkpoint_id not in [cp.id for cp in self.checkpoints.checkpoints]:
+            return True  # 不存在的 id：官方記成「判過、沒過」
         result = judge(self.true_pose, self.checkpoints.by_id(checkpoint_id))
         if result.passed:
             self.passed_ids.append(checkpoint_id)
