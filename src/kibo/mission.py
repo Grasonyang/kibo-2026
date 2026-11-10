@@ -18,7 +18,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 from kibo.budget import DEFAULT_BUDGET, BudgetConfig, plan_within_budget
 from kibo.checkpoints import Checkpoint, CheckpointSet, parse_checkpoints
 from kibo.field import TIME_LIMIT_SEC
-from kibo.geometry import Vec3, distance, norm
+from kibo.geometry import Vec3, distance, norm, quat_angle
 from kibo.judge import JUDGE_ORIGIN, Judgement, Pose, judge, target_attitude
 from kibo.planner import Speeds, leg_seconds
 from kibo.vision import body_correction, expected_marker_in_body
@@ -234,8 +234,14 @@ class _Run:
             start.position, start.orientation, target.position, target.orientation, default
         )
         self.log(
-            "leg: %.2fm in %.1fs (model %.1fs)%s"
-            % (metres, seconds, predicted, " TIMED OUT, lower bound" if timed_out else "")
+            "leg: %.2fm %.0fdeg in %.1fs (model %.1fs)%s"
+            % (
+                metres,
+                quat_angle(start.orientation, target.orientation),
+                seconds,
+                predicted,
+                " TIMED OUT, lower bound" if timed_out else "",
+            )
         )
         if not self.cfg.calibrate_speed or metres < self.cfg.calibrate_min_leg_m:
             return

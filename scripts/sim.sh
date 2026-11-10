@@ -20,6 +20,12 @@ case "${1:-}" in
     status=0
     (cd "$sim_dir" && "${compose[@]}" up --abort-on-container-exit --exit-code-from krpc) || status=$?
     (cd "$sim_dir" && "${compose[@]}" down)
+    # 每場的 rosbag 約 4 GB，而且官方會存兩份（時間戳目錄與 latest/）。預設兩份都刪，
+    # 要重播就設 KIBO_KEEP_BAG=1。檔案是容器裡的 root 寫的，所以用容器刪。
+    if [ "${KIBO_KEEP_BAG:-0}" != "1" ]; then
+      docker run --rm -v "$sim_dir/share:/tmp/share" --entrypoint bash krpc/intball-simulator:latest \
+        -c 'rm -f /tmp/share/logs/*/simulation.bag' || true
+    fi
     echo "結果：$sim_dir/share/logs/latest/（畫面 http://localhost:${KIBO_SIM_PORT:-8080}）"
     exit "$status"
     ;;

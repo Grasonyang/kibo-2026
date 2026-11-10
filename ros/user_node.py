@@ -22,6 +22,12 @@ import threading
 # 若日後改由 catkin 安裝後的包裝腳本啟動，這行讓 `import kibo` 仍然找得到。
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+# 一定要在 import rospy 之前。模擬器的映像是 Ubuntu 18.04（glibc 2.27），容器名稱靠 Docker 內建
+# DNS 解析；glibc 預設同時送 A 與 AAAA 查詢，其中一個回應會被丟掉，於是**每個執行緒**頭幾次
+# 查詢各卡 5 秒（rospy 連 master 與服務時都會查）。實測第一場因此在起跑時白等了 10 秒。
+# single-request 讓兩個查詢一前一後送，就不會卡。實機上沒有這個問題，設了也無害。
+os.environ.setdefault("RES_OPTIONS", "single-request")
+
 import actionlib
 import rospy
 from actionlib_msgs.msg import GoalStatus
@@ -369,6 +375,9 @@ class RosRobot(Robot):
         if "error" in box:
             rospy.logerr("%s failed: %s", name, box["error"])
             return None
+        waited = SERVICE_TIMEOUT_SEC - (ros_deadline - rospy.get_time())
+        if waited > 1.0:  # 正常是幾毫秒；慢了要在 log 留下證據
+            rospy.logwarn("%s took %.1fs", name, waited)
         return box.get("result")
 
     def _run_action(self, client, goal, timeout_sec):
