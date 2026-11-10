@@ -15,6 +15,7 @@ from kibo.fake_robot import FakeRobot, FakeRobotConfig
 from kibo.mission import DEFAULT_MISSION, MissionConfig, run_mission
 from kibo.scenarios import random_checkpoints_message
 from kibo.scoring import WORLD_NAMES, WORLDS
+from kibo.simulate import CAMERA_FIX_MAX_M
 
 
 class Variant(NamedTuple):
@@ -40,9 +41,6 @@ def variants() -> List[Variant]:
 
 def robot_variants(base: FakeRobotConfig) -> List[Tuple[str, FakeRobotConfig]]:
     return [("沒相機", base), ("有相機", base._replace(camera=True))]
-
-
-CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=0.3)
 
 
 class Row(NamedTuple):
@@ -111,7 +109,11 @@ def main(argv: List[str]) -> int:
         print("--- %s ---" % robot_name)
         rows = [
             evaluate(
-                v._replace(config=v.config._replace(camera_fix_max_m=0.3 if cfg.camera else 0.0)),
+                v._replace(
+                    config=v.config._replace(
+                        camera_fix_max_m=CAMERA_FIX_MAX_M if cfg.camera else 0.0
+                    )
+                ),
                 args.runs,
                 args.checkpoints,
                 args.seed,

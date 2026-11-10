@@ -6,12 +6,12 @@
 分數只能相對比較，不能拿來預測真實成績。
 """
 
-import math
 import random
 from typing import List, NamedTuple, Optional
 
 from kibo.checkpoints import CheckpointSet, parse_checkpoints
-from kibo.geometry import Pose, Quat, Vec3, add, normalize, quat_mul, quat_normalize, rotate
+from kibo.field import START_POSE
+from kibo.geometry import Pose, Quat, Vec3, add, axis_angle_quat, normalize, quat_mul, rotate
 from kibo.judge import judge
 from kibo.mission import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT, Robot
 from kibo.motion import Speeds, leg_seconds
@@ -29,7 +29,7 @@ class FakeRobotConfig(NamedTuple):
     checkpoints_fail_times: int = 0  # 前幾次 get_checkpoints 故意失敗
     notify_sec: float = 0.3  # 一次通過通知來回的時間
     scoring: Scoring = DEFAULT_SCORING
-    start_pose: Pose = Pose((0.2, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+    start_pose: Pose = START_POSE
     camera: bool = False  # 開了才會回 marker_in_body
     vision_noise_m: float = 0.005  # 相機算出的 marker 位置誤差（標準差）
 
@@ -39,9 +39,7 @@ DEFAULT_FAKE = FakeRobotConfig()
 
 def _random_rotation(rng: random.Random, sigma_deg: float) -> Quat:
     axis = normalize((rng.gauss(0, 1), rng.gauss(0, 1), rng.gauss(0, 1)))
-    half = math.radians(rng.gauss(0, sigma_deg)) / 2.0
-    s = math.sin(half)
-    return quat_normalize((axis[0] * s, axis[1] * s, axis[2] * s, math.cos(half)))
+    return axis_angle_quat(axis, rng.gauss(0, sigma_deg))
 
 
 class FakeRobot(Robot):
@@ -124,8 +122,7 @@ class FakeRobot(Robot):
         self.t += self.cfg.move_overhead_sec + leg_seconds(
             here.position, here.orientation, there, here.orientation, self.cfg.speeds
         )
-        shift = rotate(self.true_pose.orientation, delta)
-        self.true_pose = Pose(add(self.true_pose.position, shift), self.true_pose.orientation)
+        self.true_pose = Pose(there, here.orientation)
         return MOVE_SUCCESS
 
     def mission_start(self) -> bool:

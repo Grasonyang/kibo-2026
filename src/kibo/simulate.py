@@ -14,6 +14,8 @@ from kibo.fake_robot import FakeRobot, FakeRobotConfig
 from kibo.mission import DEFAULT_MISSION, MissionConfig, MissionReport, run_mission
 from kibo.scenarios import random_checkpoints_message
 
+CAMERA_FIX_MAX_M = 0.3  # 開相機修正時，修正量的上限（公尺）
+
 
 def run_once(
     seed: int, count: int, robot_cfg: FakeRobotConfig, mission_cfg: MissionConfig
@@ -50,7 +52,9 @@ def main(argv: List[str]) -> int:
     )
     scores = []
     for i in range(args.runs):
-        mission_cfg = DEFAULT_MISSION._replace(camera_fix_max_m=0.3 if args.camera else 0.0)
+        mission_cfg = DEFAULT_MISSION._replace(
+            camera_fix_max_m=CAMERA_FIX_MAX_M if args.camera else 0.0
+        )
         robot, report = run_once(args.seed + i, args.checkpoints, robot_cfg, mission_cfg)
         score = robot.score()
         scores.append(score)

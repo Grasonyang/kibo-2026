@@ -115,12 +115,12 @@ class MissionConfig(NamedTuple):
     min_speed_ratio: float = 0.5  # 校正的上限：最多當作比模型慢 1/0.5 = 2 倍
     calibrate_below_ratio: float = 0.8  # 死區：實測在模型的 1/0.8 = 1.25 倍以內不校正
     calibrate_min_leg_m: float = 0.5  # 只用這麼長以上的腿校正
+    calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
+    log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
     # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
     notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
     skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
     deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
-    calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
-    log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
 
     @property
     def probes_on(self) -> bool:
@@ -505,7 +505,7 @@ def run_mission(robot: Robot, config: MissionConfig = DEFAULT_MISSION) -> Missio
     goal_reached = False
     aborted = ""
     try:
-        goal_reached, aborted = _fly(run, robot, config)
+        goal_reached, aborted = _fly(run)
     except Exception as exc:  # 任何未預期的錯都不能吃掉完成回報
         run.log("mission flow failed: %r" % (exc,))
         aborted = "exception: %r" % (exc,)
@@ -516,8 +516,9 @@ def run_mission(robot: Robot, config: MissionConfig = DEFAULT_MISSION) -> Missio
     return run.report(goal_reached, finished, aborted)
 
 
-def _fly(run: _Run, robot: Robot, config: MissionConfig) -> Tuple[bool, str]:
+def _fly(run: _Run) -> Tuple[bool, str]:
     """從取得 CheckPoint 到抵達 Goal。回傳 (goal_reached, aborted)。"""
+    robot, config = run.robot, run.cfg
     cps = run.fetch_checkpoints()
     if cps is None:
         return False, "no checkpoints"

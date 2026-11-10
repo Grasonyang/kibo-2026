@@ -18,7 +18,7 @@ import random
 from typing import Dict, List
 
 from kibo.field import MARKERS, SAFE_AREA_MAX, SAFE_AREA_MIN, Marker
-from kibo.geometry import Quat, Vec3, add, look_at, quat_mul, rotate, scale
+from kibo.geometry import FORWARD, Vec3, add, axis_angle_quat, look_at, quat_mul, rotate, scale
 
 BANDS_POSITION = [
     {"radius": 0.1, "level": 3},
@@ -37,11 +37,6 @@ CHECKPOINT_DISTANCE_M = 0.5
 YAW_RANGE_DEG = 20.0
 PITCH_RANGE_DEG = 15.0
 SAFE_AREA_MAX_RETRY = 50
-
-
-def _roll_quat(degrees: float) -> Quat:
-    half = math.radians(degrees) / 2.0
-    return (math.sin(half), 0.0, 0.0, math.cos(half))
 
 
 def _inside_safe_area(position: Vec3) -> bool:
@@ -78,7 +73,7 @@ def checkpoint_position(marker: Marker, rng: random.Random) -> Vec3:
 def checkpoint_from_marker(marker: Marker, rng: random.Random) -> Dict:
     position = checkpoint_position(marker, rng)
     attitude = look_at(position, marker.pose.position)
-    attitude = quat_mul(attitude, _roll_quat(rng.uniform(-180.0, 180.0)))
+    attitude = quat_mul(attitude, axis_angle_quat(FORWARD, rng.uniform(-180.0, 180.0)))
     return {
         "checkpoint_id": marker.id,
         "position": list(position),
