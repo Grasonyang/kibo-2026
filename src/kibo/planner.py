@@ -68,10 +68,19 @@ def _nearest_neighbour(
     return order
 
 
-def _held_karp(
+class _Table(NamedTuple):
+    """Held-Karp 的整張表：每個「拜訪了哪些點、最後停在哪」的最小成本。"""
+
+    best: Dict[Tuple[int, int], float]
+    parent: Dict[Tuple[int, int], Optional[int]]
+    to_goal: List[float]
+    direct: float  # 起點直接到 Goal
+
+
+def _table(
     start_pos: Vec3, start_att: Quat, waypoints: List[Checkpoint], goal: Checkpoint, cost_fn: CostFn
-) -> List[int]:
-    """精確解。成本先算成矩陣，DP 裡只查表，n=11 時少掉約 5 萬次幾何運算。"""
+) -> _Table:
+    """成本先算成矩陣，DP 裡只查表，n=11 時少掉約 5 萬次幾何運算。"""
     n = len(waypoints)
     from_start = [cost_fn(start_pos, start_att, wp.position, wp.attitude) for wp in waypoints]
     to_goal = [cost_fn(wp.position, wp.attitude, goal.position, goal.attitude) for wp in waypoints]
@@ -103,20 +112,99 @@ def _held_karp(
                 if candidate < best.get(key, float("inf")):
                     best[key] = candidate
                     parent[key] = i
+    direct = cost_fn(start_pos, start_att, goal.position, goal.attitude)
+    return _Table(best, parent, to_goal, direct)
 
-    full = (1 << n) - 1
-    last = min(range(n), key=lambda i: best[(full, i)] + to_goal[i])
+
+def _unwind(table: _Table, waypoints: List[Checkpoint], mask: int, last: int) -> List[int]:
     order_idx: List[int] = []
-    mask = full
     i: Optional[int] = last
-    for _ in range(n):  # parent 鏈最長 n 步
+    for _ in range(len(waypoints)):  # parent 鏈最長 n 步
         if i is None:
             break
         order_idx.append(i)
-        prev = parent[(mask, i)]
+        prev = table.parent[(mask, i)]
         mask &= ~(1 << i)
         i = prev
     return [waypoints[k].id for k in reversed(order_idx)]
+
+
+def _held_karp(
+    start_pos: Vec3, start_att: Quat, waypoints: List[Checkpoint], goal: Checkpoint, cost_fn: CostFn
+) -> List[int]:
+    """精確解：拜訪全部中途點、停在 Goal 的最省順序。"""
+    n = len(waypoints)
+    table = _table(start_pos, start_att, waypoints, goal, cost_fn)
+    full = (1 << n) - 1
+    last = min(range(n), key=lambda i: table.best[(full, i)] + table.to_goal[i])
+    return _unwind(table, waypoints, full, last)
+
+
+def _best_subset(
+    start_pos: Vec3,
+    start_att: Quat,
+    waypoints: List[Checkpoint],
+    goal: Checkpoint,
+    cost_fn: CostFn,
+    limit_sec: float,
+    per_stop_sec: float,
+) -> List[int]:
+    """在 limit_sec 內（每停一點另加 per_stop_sec，Goal 也算一停）能拜訪最多點的順序；
+    一樣多就選最快的。連 Goal 都來不及時回空清單（只去 Goal）。
+
+    Held-Karp 的表本來就有每個子集合的最小成本，所以挑子集合不用多算，只是多看一遍。
+    """
+    n = len(waypoints)
+    table = _table(start_pos, start_att, waypoints, goal, cost_fn)
+    chosen: Tuple[int, float, int, int] = (0, table.direct + per_stop_sec, 0, -1)
+    for (mask, i), seconds in table.best.items():
+        count = bin(mask).count("1")
+        total = seconds + table.to_goal[i] + per_stop_sec * (count + 1)
+        if total > limit_sec:
+            continue
+        if count > chosen[0] or (count == chosen[0] and total < chosen[1]):
+            chosen = (count, total, mask, i)
+    if chosen[3] < 0 or n == 0:
+        return []
+    return _unwind(table, waypoints, chosen[2], chosen[3])
+
+
+def _route(
+    start_pos: Vec3,
+    start_att: Quat,
+    waypoints: List[Checkpoint],
+    goal: Checkpoint,
+    order: List[int],
+    cost_fn: CostFn,
+) -> Route:
+    legs = []
+    pos, att = start_pos, start_att
+    by_id = {wp.id: wp for wp in waypoints}
+    for cp_id in order + [goal.id]:
+        cp = goal if cp_id == goal.id else by_id[cp_id]
+        legs.append(Leg(cp_id, cost_fn(pos, att, cp.position, cp.attitude)))
+        pos, att = cp.position, cp.attitude
+    return Route(order + [goal.id], legs)
+
+
+def plan_most_points(
+    start_pos: Vec3,
+    start_att: Quat,
+    waypoints: List[Checkpoint],
+    goal: Checkpoint,
+    limit_sec: float,
+    per_stop_sec: float,
+    cost: Optional[CostFn] = None,
+) -> Route:
+    """時間內能拜訪最多中途點、最後停在 Goal 的路線（精確解）。一定包含 Goal。
+
+    中途點超過 MAX_WAYPOINTS 個（規則外）時不挑子集合，交給呼叫端處理。
+    """
+    cost_fn = cost or leg_seconds
+    if not waypoints or len(waypoints) > MAX_WAYPOINTS:
+        return plan_route(start_pos, start_att, waypoints, goal, cost_fn)
+    order = _best_subset(start_pos, start_att, waypoints, goal, cost_fn, limit_sec, per_stop_sec)
+    return _route(start_pos, start_att, waypoints, goal, order, cost_fn)
 
 
 def plan_route(
@@ -139,11 +227,4 @@ def plan_route(
     else:
         order = _held_karp(start_pos, start_att, waypoints, goal, cost_fn)
 
-    legs = []
-    pos, att = start_pos, start_att
-    by_id = {wp.id: wp for wp in waypoints}
-    for cp_id in order + [goal.id]:
-        cp = goal if cp_id == goal.id else by_id[cp_id]
-        legs.append(Leg(cp_id, cost_fn(pos, att, cp.position, cp.attitude)))
-        pos, att = cp.position, cp.attitude
-    return Route(order + [goal.id], legs)
+    return _route(start_pos, start_att, waypoints, goal, order, cost_fn)

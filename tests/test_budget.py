@@ -46,3 +46,31 @@ def test_goal_is_never_dropped_even_when_nothing_fits():
     )
     assert plan.route.order == [9]
     assert plan.dropped == [1]
+
+
+def test_a_far_cluster_is_given_up_instead_of_the_near_points():
+    # 遠處有兩個點擠在一起（6 m 外，來回約 84 秒），近處有兩個點（合計約 32 秒）。
+    # 逐一刪「省最多秒」的點會先刪近的（遠的那兩個互相掩護，各自只省 6 秒），最後一個都不剩；
+    # 正確答案是整組放棄遠的，留下近的兩個。
+    waypoints = [
+        cp(1, (-0.5, 0.0, 0.0)),
+        cp(2, (-1.0, 0.0, 0.0)),
+        cp(3, (6.0, 0.0, 0.0)),
+        cp(4, (6.2, 0.0, 0.0)),
+    ]
+    plan = plan_within_budget(
+        START, IDENTITY_QUAT, waypoints, GOAL, remaining_sec=60.0, config=CONFIG
+    )
+    assert plan.route.order == [1, 2, 9]
+    assert sorted(plan.dropped) == [3, 4]
+    assert plan.estimated_sec + CONFIG.margin_sec <= 60.0
+
+
+def test_among_equally_many_points_the_quickest_set_is_kept():
+    # 只夠去一個：選來回最快的那個（0.5 m），不是 1 m 的。
+    waypoints = [cp(1, (1.0, 0.0, 0.0)), cp(2, (-0.5, 0.0, 0.0))]
+    plan = plan_within_budget(
+        START, IDENTITY_QUAT, waypoints, GOAL, remaining_sec=40.0, config=CONFIG
+    )
+    assert plan.route.order == [2, 9]
+    assert plan.dropped == [1]

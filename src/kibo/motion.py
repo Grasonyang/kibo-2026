@@ -51,8 +51,8 @@ class MotionModel(NamedTuple):
     v_max_mps: float = 0.20  # pos_profile/v_max
     w_max_radps: float = 0.436332313  # att_profile/w_max（25°/s）
     # 剖面結束到「可以回報」之間多等的時間。控制器要在容差（10 cm、0.5 rad）內連續待滿 3 秒
-    # 才回報成功（ctl/duration_goal），但進容差比剖面結束早 3 秒左右，兩者剛好抵銷：實測 action 回來的時刻
-    # 與剖面結束只差 -1.1 ± 1.6 秒（docs/kibo/motion-model.md），所以取 0。
+    # 才回報成功（ctl/duration_goal），但進容差比剖面結束早 3 秒左右，兩者大致抵銷：
+    # 實測 action 回來的時刻與剖面結束只差 -0.95 ± 2.05 秒（docs/kibo/motion-model.md），取 0。
     overhead_sec: float = 0.0
 
 
