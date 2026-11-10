@@ -109,7 +109,7 @@ class RosRobot(Robot):
         self._nav_sub = rospy.Subscriber("/sensor_fusion/navigation", Navigation, self._on_nav)
         self._ctl_type = None  # /ctl/status 最新的控制狀態，只拿來 log
         self._ctl_sub = rospy.Subscriber("/ctl/status", CtlStatus, self._on_ctl)
-        # 相機（選用）：只在 settle 不穩定時用來修正幾公分
+        # 相機（選用）：每到一點記一行 marker 的位置；相機修正開啟時才用來修正幾公分（預設關）
         self._image = None
         self._camera_info = None
         self._image_lock = threading.Lock()

@@ -124,6 +124,17 @@ def _held_karp(
     return _unwind(table, waypoints, full, last)
 
 
+class _Pick(NamedTuple):
+    """目前最好的一組：去幾個中途點、總共幾秒、哪幾個（位元遮罩）、最後停在哪一個。
+
+    `last` 是 -1 代表只去 Goal。"""
+
+    points: int
+    seconds: float
+    mask: int
+    last: int
+
+
 def _best_subset(
     start_pos: Vec3,
     start_att: Quat,
@@ -140,17 +151,17 @@ def _best_subset(
     """
     n = len(waypoints)
     table = _table(start_pos, start_att, waypoints, goal, cost_fn)
-    chosen: Tuple[int, float, int, int] = (0, table.direct + per_stop_sec, 0, -1)
+    chosen = _Pick(points=0, seconds=table.direct + per_stop_sec, mask=0, last=-1)
     for (mask, i), seconds in table.best.items():
         count = bin(mask).count("1")
         total = seconds + table.to_goal[i] + per_stop_sec * (count + 1)
         if total > limit_sec:
             continue
-        if count > chosen[0] or (count == chosen[0] and total < chosen[1]):
-            chosen = (count, total, mask, i)
-    if chosen[3] < 0 or n == 0:
+        if count > chosen.points or (count == chosen.points and total < chosen.seconds):
+            chosen = _Pick(count, total, mask, i)
+    if chosen.last < 0 or n == 0:
         return []
-    return _unwind(table, waypoints, chosen[2], chosen[3])
+    return _unwind(table, waypoints, chosen.mask, chosen.last)
 
 
 def _route(
