@@ -3,8 +3,9 @@
 每個情境用 FakeRobot 的子類別改掉一個行為，其餘照舊。
 """
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
-from kibo.geometry import Pose, add, rotate
+from conftest import PERFECT
+from kibo.fake_robot import FakeRobot
+from kibo.geometry import FORWARD, Pose, add, axis_angle_quat, quat_mul, rotate
 from kibo.mission import (
     DEFAULT_MISSION,
     MOVE_INVALID,
@@ -13,7 +14,6 @@ from kibo.mission import (
     run_mission,
 )
 
-PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
 CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=0.3)
 SIDEWAYS_15CM = (0.0, 0.15, 0.0)  # 機體 +Y，與視線垂直：位置 Lv2、對中約 17° 也是 Lv2
 LOST_35CM = (0.0, 0.0, 0.35)  # 超出最寬的位置餘裕
@@ -271,12 +271,7 @@ class StillTurningRobot(FakeRobot):
     def pose(self):
         pose = super().pose()
         if pose is not None and self.t < self.turning_until:
-            half = self.residual_deg / 2.0 * 3.141592653589793 / 180.0
-            from math import cos, sin
-
-            from kibo.geometry import quat_mul
-
-            rolled = quat_mul(pose.orientation, (sin(half), 0.0, 0.0, cos(half)))
+            rolled = quat_mul(pose.orientation, axis_angle_quat(FORWARD, self.residual_deg))
             return Pose(pose.position, rolled, stamp=pose.stamp)
         return pose
 

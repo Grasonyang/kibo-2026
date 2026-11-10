@@ -1,22 +1,13 @@
-import math
-
 import pytest
 
 from kibo.checkpoints import parse_checkpoints
-from kibo.geometry import Pose, add, quat_mul, scale
+from kibo.geometry import Pose, add, axis_angle_quat, quat_mul, scale
 from kibo.judge import judge
 
 
 @pytest.fixture
 def cp1(three_point_message):
     return parse_checkpoints(three_point_message).by_id(1)
-
-
-def body_rotation(axis, degrees):
-    """繞機體某軸轉 degrees 的四元數（右乘到目前姿態上）。"""
-    half = math.radians(degrees) / 2.0
-    s = math.sin(half)
-    return (axis[0] * s, axis[1] * s, axis[2] * s, math.cos(half))
 
 
 def test_exact_server_pose_is_level_3(cp1):
@@ -45,25 +36,25 @@ def test_outside_widest_band_fails(cp1):
 
 
 def test_roll_of_15_degrees_about_line_of_sight_is_level_2(cp1):
-    rolled = quat_mul(cp1.attitude, body_rotation((1.0, 0.0, 0.0), 15.0))
+    rolled = quat_mul(cp1.attitude, axis_angle_quat((1.0, 0.0, 0.0), 15.0))
     result = judge(Pose(cp1.position, rolled), cp1)
     assert (result.roll_level, result.centering_level, result.level) == (2, 3, 2)
 
 
 def test_yaw_of_12_degrees_drops_centering_to_level_2(cp1):
     # 對中從機體中心量，轉 12° 就是 12°。
-    yawed = quat_mul(cp1.attitude, body_rotation((0.0, 0.0, 1.0), 12.0))
+    yawed = quat_mul(cp1.attitude, axis_angle_quat((0.0, 0.0, 1.0), 12.0))
     result = judge(Pose(cp1.position, yawed), cp1)
     assert (result.centering_level, result.roll_level, result.level) == (2, 3, 2)
 
 
 def test_yaw_of_35_degrees_fails_centering(cp1):
-    yawed = quat_mul(cp1.attitude, body_rotation((0.0, 0.0, 1.0), 35.0))
+    yawed = quat_mul(cp1.attitude, axis_angle_quat((0.0, 0.0, 1.0), 35.0))
     assert not judge(Pose(cp1.position, yawed), cp1).passed
 
 
 def test_overall_level_is_the_lowest_of_the_three(cp1):
-    rolled = quat_mul(cp1.attitude, body_rotation((1.0, 0.0, 0.0), 15.0))  # roll Lv2
+    rolled = quat_mul(cp1.attitude, axis_angle_quat((1.0, 0.0, 0.0), 15.0))  # roll Lv2
     pose = Pose(
         add(cp1.position, scale((0.0, -1.0, 0.0), 0.25)), rolled
     )  # 沿視線靠近：position Lv1
@@ -73,7 +64,7 @@ def test_overall_level_is_the_lowest_of_the_three(cp1):
 
 def test_roll_error_grows_when_the_line_of_sight_is_off(cp1):
     # 機體自己只滾了 25°（Lv1），但側偏 12 cm 讓視線歪 13.5°，官方量到的滾轉約 32°，整點 0 分。
-    rolled = quat_mul(cp1.attitude, body_rotation((1.0, 0.0, 0.0), 25.0))
+    rolled = quat_mul(cp1.attitude, axis_angle_quat((1.0, 0.0, 0.0), 25.0))
     result = judge(Pose(add(cp1.position, (0.12, 0.0, 0.0)), rolled), cp1)
     assert result.roll_deg == pytest.approx(31.98, abs=0.01)
     assert not result.passed
@@ -99,7 +90,7 @@ def test_target_attitude_keeps_server_attitude_when_it_points_at_marker(cp1):
 def test_target_attitude_falls_back_to_look_at_when_server_attitude_is_off(cp1):
     from kibo.judge import target_attitude
 
-    pointing_away = quat_mul(cp1.attitude, body_rotation((0.0, 0.0, 1.0), 90.0))
+    pointing_away = quat_mul(cp1.attitude, axis_angle_quat((0.0, 0.0, 1.0), 90.0))
     broken = cp1._replace(attitude=pointing_away)
     fixed = target_attitude(broken)
     assert fixed != pointing_away
@@ -175,7 +166,7 @@ def test_judge_matches_the_official_judge_module(
 def test_top_band_usage_is_the_tightest_of_the_three_margins(cp1):
     from kibo.judge import top_band_usage
 
-    rolled = quat_mul(cp1.attitude, body_rotation((1.0, 0.0, 0.0), 8.0))
+    rolled = quat_mul(cp1.attitude, axis_angle_quat((1.0, 0.0, 0.0), 8.0))
     assert top_band_usage(judge(Pose(cp1.position, rolled), cp1), cp1) == pytest.approx(0.8)
     # 側偏 5 cm：位置用掉 0.05/0.1 = 5 成，對中 atan(0.05/0.5) = 5.7° 用掉 5.7 成
     sideways = judge(Pose(add(cp1.position, (0.05, 0.0, 0.0)), cp1.attitude), cp1)
@@ -192,7 +183,7 @@ def test_roll_reading_at_the_goal_marker_amplifies_small_pointing_errors():
     for seed in range(10):
         for cp in parse_checkpoints(random_checkpoints_message(12, seed)).checkpoints:
             for axis in ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)):
-                off = quat_mul(cp.attitude, body_rotation(axis, 1.5))
+                off = quat_mul(cp.attitude, axis_angle_quat(axis, 1.5))
                 reading = judge(Pose(cp.position, off), cp).roll_deg
                 worst[cp.id] = max(worst.get(cp.id, 0.0), reading)
     assert worst[12] > 5.0

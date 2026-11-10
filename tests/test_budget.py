@@ -1,16 +1,12 @@
 import pytest
 
+from conftest import checkpoint_at as cp
 from kibo.budget import BudgetConfig, plan_within_budget
-from kibo.checkpoints import Checkpoint
 from kibo.geometry import IDENTITY_QUAT
 
 # 預設的移動時間模型：沿機體 X 軸 1 m 是 2√(1/0.022511) = 13.33 秒；
 # 沿 Y 軸 10 m 是 10/0.2 + 0.2/0.012382 = 66.15 秒。
 CONFIG = BudgetConfig(settle_sec=5.0, margin_sec=10.0)
-
-
-def cp(cp_id, position):
-    return Checkpoint(cp_id, position, position, IDENTITY_QUAT, IDENTITY_QUAT, [], [], [])
 
 
 START = (0.0, 0.0, 0.0)

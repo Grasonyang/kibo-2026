@@ -22,7 +22,8 @@ def test_timeout_zeroes_everything_in_t0_but_keeps_checkpoints_in_t1():
 
 
 def test_fake_robot_can_be_scored_in_any_world(three_point_message):
-    from kibo.fake_robot import FakeRobot, FakeRobotConfig
+    from conftest import PERFECT
+    from kibo.fake_robot import FakeRobot
     from kibo.mission import DEFAULT_MISSION, run_mission
 
     class SkipsOne(FakeRobot):
@@ -31,10 +32,7 @@ def test_fake_robot_can_be_scored_in_any_world(three_point_message):
                 return False
             return super().notify_checkpoint(checkpoint_id)
 
-    robot = SkipsOne(
-        three_point_message,
-        FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0),
-    )
+    robot = SkipsOne(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)
     assert robot.score(WORLDS["B/T0"]) > robot.score(WORLDS["A/T0"]) > 0.0
 

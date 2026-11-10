@@ -1,11 +1,10 @@
 """R4：校準與飛行記錄——穩定判定只計新資料、探針旗標、沒成功移動不回報、log 可算速度。"""
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
+from conftest import PERFECT
+from kibo.fake_robot import FakeRobot
 from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose
 from kibo.mission import DEFAULT_MISSION, MOVE_INVALID, run_mission
-
-PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
 
 
 class StaleNavRobot(FakeRobot):

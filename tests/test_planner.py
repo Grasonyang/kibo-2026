@@ -1,13 +1,9 @@
 import time
 
-from kibo.checkpoints import Checkpoint
+from conftest import checkpoint_at as cp
 from kibo.geometry import IDENTITY_QUAT
 from kibo.motion import Speeds, leg_seconds
 from kibo.planner import plan_route
-
-
-def cp(cp_id, position, attitude=IDENTITY_QUAT):
-    return Checkpoint(cp_id, position, position, IDENTITY_QUAT, attitude, [], [], [])
 
 
 def test_route_visits_collinear_points_in_order_and_ends_at_goal():
