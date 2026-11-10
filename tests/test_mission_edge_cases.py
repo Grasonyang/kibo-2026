@@ -16,7 +16,7 @@ from kibo.mission import (
 
 PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)
 CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=0.3)
-SIDEWAYS_15CM = (0.0, 0.15, 0.0)  # 機體 +Y，與視線垂直：位置 Lv2、對中 Lv1
+SIDEWAYS_15CM = (0.0, 0.15, 0.0)  # 機體 +Y，與視線垂直：位置 Lv2、對中約 17° 也是 Lv2
 LOST_35CM = (0.0, 0.0, 0.35)  # 超出最寬的位置餘裕
 
 
@@ -85,8 +85,10 @@ def test_without_navigation_nothing_is_reported(three_point_message):
     robot = BlindRobot(three_point_message, PERFECT)
     report = run_mission(robot, DEFAULT_MISSION)
     assert report.finished
-    assert robot.passed_ids == []
+    assert robot.judged_ids == []  # 一個通過通知都沒送
     assert all(v.judged_level == 0 and not v.notified for v in report.visits)
+    # 但它確實盲飛到了 Goal，官方在完成回報時會用當下姿態判 Goal，所以 Goal 仍然算到。
+    assert robot.passed_ids == [12]
 
 
 def test_unstable_but_inside_margin_is_still_reported_as_unstable(three_point_message):
@@ -108,8 +110,8 @@ def test_when_hurrying_level_1_counts_as_stable(three_point_message):
     robot = OffsetRobot(three_point_message, PERFECT)
     hurried = DEFAULT_MISSION._replace(time_limit_sec=DEFAULT_MISSION.hurry_sec - 1.0)
     report = run_mission(robot, hurried)
-    assert report.visits[0].stable
-    assert report.visits[0].judged_level == 1
+    assert report.visits[0].stable  # 不趕時間時 Lv2 不算穩定（上一個測試），趕時間就算
+    assert report.visits[0].judged_level == 2
 
 
 def test_one_refinement_move_recovers_level_3(three_point_message):

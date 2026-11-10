@@ -26,6 +26,7 @@ class FakeRobotConfig(NamedTuple):
     nav_jitter_m: float = 0.005  # 每次讀取位置的抖動
     move_fail_prob: float = 0.0
     checkpoints_fail_times: int = 0  # 前幾次 get_checkpoints 故意失敗
+    notify_sec: float = 0.3  # 一次通過通知來回的時間
     scoring: Scoring = DEFAULT_SCORING
     start_pose: Pose = Pose((0.2, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     camera: bool = False  # 開了才會回 marker_in_body
@@ -59,6 +60,8 @@ class FakeRobot(Robot):
         self.finished_at: Optional[float] = None
         self.passed_levels: List[int] = []
         self.passed_ids: List[int] = []
+        self.judged_ids: List[int] = []  # 已經被判過的點（過或沒過都算）
+        self.goal_reached = False
         self.move_calls = 0
         self.relative_calls = 0
         self.checkpoints_calls = 0
@@ -131,19 +134,31 @@ class FakeRobot(Robot):
         return self.message
 
     def notify_checkpoint(self, checkpoint_id: int) -> bool:
-        """假裁判：照真實姿態判定；同一點只給一次分。"""
-        if checkpoint_id in self.passed_ids:
-            return False
+        """假裁判，照官方 judge.py：通知一律被「接受」（回 True 不代表通過），
+        而且**每個點只判第一次**，沒過也不能重來；判定用通知當下的真實姿態。"""
+        self.t += self.cfg.notify_sec
+        if checkpoint_id in self.judged_ids:
+            return True  # 官方只記一行 "already processed"
+        self.judged_ids.append(checkpoint_id)
         result = judge(self.true_pose, self.checkpoints.by_id(checkpoint_id))
-        self.t += 1.0  # 規則：維持 1 秒
-        if not result.passed:
-            return False
-        self.passed_ids.append(checkpoint_id)
-        self.passed_levels.append(result.level)
+        if result.passed:
+            self.passed_ids.append(checkpoint_id)
+            self.passed_levels.append(result.level)
         return True
 
     def mission_finish(self) -> bool:
+        """官方的完成回報：Goal 點先前通過就算到達；否則用當下姿態再判一次，
+        通過的話 Goal 點也補記為通過（即使先前那次通知沒過）。"""
         self.finished_at = self.t
+        goal_id = self.checkpoints.goal_id
+        if goal_id in self.passed_ids:
+            self.goal_reached = True
+        else:
+            result = judge(self.true_pose, self.checkpoints.goal)
+            self.goal_reached = result.passed
+            if result.passed:
+                self.passed_ids.append(goal_id)
+                self.passed_levels.append(result.level)
         return True
 
     def stop_requested(self) -> bool:
@@ -161,7 +176,7 @@ class FakeRobot(Robot):
     def score(self, scoring: Optional[Scoring] = None) -> float:
         """假分數。不給 scoring 就用設定裡的；給 `kibo.scoring.WORLDS` 的某一個可看其他世界。"""
         rules = scoring or self.cfg.scoring
-        goal = self.checkpoints.goal_id in self.passed_ids
+        goal = self.goal_reached
         late = self.finished_at is None or self.finished_at > rules.time_limit_sec
         all_passed = len(self.passed_ids) == len(self.checkpoints.checkpoints)
         return rules.total(self.passed_levels, goal, self.remaining_at_finish(), all_passed, late)
