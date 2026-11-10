@@ -14,7 +14,6 @@ ROS 訊息 <-> kibo 的 Pose 與 MOVE_* 結果。決策全部在 kibo.mission。
 映像裡的 `python` 是 2.7）。
 """
 
-import collections
 import os
 import sys
 import threading
@@ -51,16 +50,22 @@ from platform_msgs.srv import StopProcessingUserNode, StopProcessingUserNodeResp
 from sensor_msgs.msg import CameraInfo, Image
 
 from kibo.buslinks import missing_listeners, topic_parties
+from kibo.ctl_result import (
+    ACTION_DONE,
+    ACTION_STOPPED,
+    ACTION_TIMEOUT,
+    RESULT_CODES,
+    mismatched_codes,
+    move_outcome,
+)
 from kibo.geometry import Pose
 from kibo.mission import (
     DEFAULT_MISSION,
     MOVE_ABORTED,
-    MOVE_INVALID,
-    MOVE_SUCCESS,
-    MOVE_TIMEOUT,
     Robot,
     run_mission,
 )
+from kibo.navlog import NavLog
 from kibo.vision import gray_from_raw, observe_markers
 
 SERVICE_TIMEOUT_SEC = 10.0  # 等服務出現，以及等它回應，各自的上限
@@ -81,18 +86,15 @@ EVENT_QUERY_SEC = 2.0  # 問一次連線狀況的上限（牆鐘）；XMLRPC 本
 EVENT_MAX_POLLS = int(EVENT_WAIT_SEC / POLL_SEC) + 2
 EVENT_ABSENT_POLLS = 3  # 連續這麼多次都沒有人發佈 EVENT_TOPIC，才認定這裡沒有這種接法
 
-ACTION_DONE = "done"
-ACTION_TIMEOUT = "timeout"
-ACTION_STOPPED = "stopped"
-
 
 class RosRobot(Robot):
     def __init__(self):
-        self._nav = None  # 最新的 Navigation 訊息
-        self._nav_history = collections.deque(maxlen=NAV_HISTORY_LEN)  # 最近幾秒的 Pose
-        self._nav_count = 0
-        self._nav_first_stamp = None  # 第一筆導航的 stamp，算頻率用
-        self._nav_lock = threading.Lock()
+        wrong = mismatched_codes({n: getattr(CtlCommandResult, n, None) for n in RESULT_CODES})
+        if wrong:  # 訊息定義改了：移動結果會被翻錯，一定要在 log 裡看得到
+            rospy.logerr("CtlCommandResult codes differ from kibo.ctl_result: %s", wrong)
+        # 導航資料都進這本紀錄（自己上鎖）；要留多密、多久、多舊不算數，規則在 kibo.navlog。
+        self._navlog = NavLog(NAV_HISTORY_STEP_SEC, NAV_HISTORY_LEN, NAV_FRESH_SEC)
+        self._nav_header = None  # 最新一筆訊息的 header 與 status，只給 survey 印
         self._stop = threading.Event()
         self._active_lock = threading.Lock()
         self._active_goals = []  # 正在執行的 action client，停止時要取消
@@ -133,21 +135,10 @@ class RosRobot(Robot):
         return self._stop.is_set() or rospy.is_shutdown()
 
     def pose(self):
-        with self._nav_lock:
-            nav = self._nav
-        if nav is None:
-            return None
-        age = (rospy.Time.now() - nav.pose.header.stamp).to_sec()
-        if age > NAV_FRESH_SEC:
-            return None
-        p = nav.pose.pose.position
-        q = nav.pose.pose.orientation
-        return Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=nav.pose.header.stamp.to_sec())
+        return self._navlog.latest(rospy.get_time())
 
     def recent_poses(self, seconds):
-        oldest = rospy.get_time() - seconds
-        with self._nav_lock:
-            return [pose for pose in self._nav_history if pose.stamp >= oldest]
+        return self._navlog.recent(rospy.get_time(), seconds)
 
     def move_to(self, target, timeout_sec):
         if not self._command.wait_for_server(rospy.Duration(ACTION_SERVER_TIMEOUT_SEC)):
@@ -164,20 +155,7 @@ class RosRobot(Robot):
             getattr(result, "type", None),
             self._ctl_type,
         )
-        if status == ACTION_TIMEOUT:
-            return MOVE_TIMEOUT
-        if status == ACTION_STOPPED or result is None:
-            return MOVE_ABORTED  # 被停止、被拒絕，或 server 沒帶 result
-        if result.type == CtlCommandResult.TERMINATE_SUCCESS:
-            return MOVE_SUCCESS
-        if result.type in (
-            CtlCommandResult.TERMINATE_INVALID_NAV,
-            CtlCommandResult.TERMINATE_INVALID_CMD,
-        ):
-            return MOVE_INVALID
-        if result.type == CtlCommandResult.TERMINATE_TIME_OUT:
-            return MOVE_TIMEOUT
-        return MOVE_ABORTED
+        return move_outcome(status, getattr(result, "type", None))
 
     def mission_start(self):
         self._wait_for_event_listeners()
@@ -239,11 +217,7 @@ class RosRobot(Robot):
             target=target, type=CtlStatusType(type=CtlStatusType.MOVE_TO_RELATIVE_TARGET)
         )
         status, result = self._run_action(self._command, goal, timeout_sec)
-        if status == ACTION_TIMEOUT:
-            return MOVE_TIMEOUT
-        if status == ACTION_STOPPED or result is None:
-            return MOVE_ABORTED
-        return MOVE_SUCCESS if result.type == CtlCommandResult.TERMINATE_SUCCESS else MOVE_ABORTED
+        return move_outcome(status, getattr(result, "type", None))
 
     # ---- 給節點用 ----
     def request_stop(self):
@@ -344,18 +318,12 @@ class RosRobot(Robot):
         return box.get("result")
 
     def _on_nav(self, msg):
+        """一秒大約 200 次，所以只做最少的事：轉成 Pose 交給紀錄。"""
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
         stamp = msg.pose.header.stamp.to_sec()
-        with self._nav_lock:
-            self._nav = msg
-            self._nav_count += 1
-            if self._nav_first_stamp is None:
-                self._nav_first_stamp = stamp
-            history = self._nav_history
-            if history and 0.0 <= stamp - history[-1].stamp < NAV_HISTORY_STEP_SEC:
-                return  # 這個 callback 一秒跑 200 次，大部分在這裡就結束
-            p = msg.pose.pose.position
-            q = msg.pose.pose.orientation
-            history.append(Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=stamp))
+        self._navlog.add(Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=stamp))
+        self._nav_header = (msg.pose.header.frame_id, stamp, getattr(msg, "status", None))
 
     def _on_image(self, msg):
         with self._image_lock:
@@ -391,31 +359,25 @@ class RosRobot(Robot):
             rospy.logwarn("[survey] failed: %s", exc)
 
     def _survey(self):
-        with self._nav_lock:
-            nav, count, first = self._nav, self._nav_count, self._nav_first_stamp
-        # 用導航自己的 stamp 算頻率：節點剛啟動時模擬時鐘可能還是 0，不能拿啟動時刻當起點。
-        window = 1e-3
-        if nav is not None and first is not None:
-            window = max(nav.pose.header.stamp.to_sec() - first, 1e-3)
+        # 頻率用導航自己的 stamp 算：節點剛啟動時模擬時鐘可能還是 0，不能拿啟動時刻當起點。
         rospy.loginfo(
-            "[survey] use_sim_time=%s now=%.3f nav_msgs=%d over %.1fs (%.1f Hz)",
+            "[survey] use_sim_time=%s now=%.3f nav_msgs=%d (%.1f Hz)",
             rospy.get_param("/use_sim_time", False),
             rospy.get_time(),
-            count,
-            window,
-            count / window,
+            self._navlog.count,
+            self._navlog.rate_hz(),
         )
-        if nav is not None:
-            p = nav.pose.pose.position
+        header, pose = self._nav_header, self._navlog.latest(rospy.get_time())
+        if header is not None and pose is not None:
             rospy.loginfo(
                 "[survey] nav frame=%s stamp=%.3f age=%.3f status=%s pos=(%.3f, %.3f, %.3f)",
-                nav.pose.header.frame_id,
-                nav.pose.header.stamp.to_sec(),
-                (rospy.Time.now() - nav.pose.header.stamp).to_sec(),
-                getattr(nav, "status", None),
-                p.x,
-                p.y,
-                p.z,
+                header[0],
+                header[1],
+                rospy.get_time() - header[1],
+                header[2],
+                pose.position[0],
+                pose.position[1],
+                pose.position[2],
             )
         else:
             rospy.logwarn("[survey] no navigation message yet")
