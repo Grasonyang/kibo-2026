@@ -61,6 +61,21 @@ G2 加上 J4：保持伺服器給的姿態時，側向偏 8.8 cm 對中就掉到
 | R6 | 導航誤差很小：位置平均約 2 mm、標準差不到 1 mm，延遲 0.1 s | `docker/ros_overlay/src/platform_sim/simulation/ib2_gazebo/sim/sim.yaml` 的 `nav_parameter` |
 | R7 | 映像裡有 OpenCV 3.3.1（含 ArUco）、numpy、scipy、scikit-learn；範本的 shebang 是 `#!/usr/bin/python3` | `docker/Dockerfile.krpc-base`；`krpc_user/scripts/user_template.py` |
 
+## 實際跑出來才知道的（2026-11-10，本機）
+
+| # | 事實 | 證據 |
+|---|---|---|
+| E1 | **起跑太快，評分模組會漏掉「任務開始」，整場事件都被丟掉。** `krpc_api_node` 把事件轉發到沒有 latch 的 `/gs/data`，評分模組要先連上才收得到；它和使用者節點同時啟動 | 第六場：`judge.log` 每筆都是 `checkpoint event received before mission start`，沒有 `result.json`。API 節點啟動後 1.33 秒呼叫 `mission_start` 中了，1.15 秒那場沒中，2.6 秒以上都沒中 |
+| E2 | 官方範本沒遇到 E1，是因為同一個容器裡的名稱查詢會卡 5 秒（E3），剛好把它擋住 | 同上；範本的流程與我們相同 |
+| E3 | 映像的 glibc 2.27 同時送 A 與 AAAA 查詢，Docker 內建 DNS 會丟一個回應，**每個執行緒**頭幾次查詢各卡 5 秒 | 12 個新容器各查 5 次：12 個都有一次卡 5 秒；設 `RES_OPTIONS=single-request` 後 0 次 |
+| E4 | `/sensor_fusion/navigation` 約 200 Hz，`header.stamp` 有值，比現在晚約 0.11 秒，frame 是 `iss_body`；`use_sim_time` 為真 | 節點的 `[survey]` 與尾段紀錄（64 筆只跨 0.33 秒） |
+| E5 | 影像 800x800、`rgb8`；`camera_info` 的焦距 476.7、主點 (400.5, 400.5)、沒有畸變 | `[survey]` |
+| E6 | `DICT_4X4_50` 偵測得到 marker（9 點裡 6 點看到）。用邊長 2 cm、相機在機頭前 0.14 m 換算，側向與導航一致，但**深度比導航多約 15 cm** | 每點的 `marker #n seen at body ...` |
+| E7 | 規則書附錄 #22 的 Microgravity module 不在下載包裡：`ENABLE_GRAVITY_MODULE` 只出現在 `docker-compose.yaml`，沒有任何程式讀它 | 對整個下載包與映像 `grep` |
+
+我們的對策：E1 → 起跑前用 `getBusInfo` 確認 `/gs/data` 有非 rosbag 的訂閱者連上，最多等 10 秒（`ros/user_node.py` 的
+`_wait_for_event_listener`）；E3 → 節點開頭設 `RES_OPTIONS`；E6 → 相機修正維持關閉。
+
 ## 對 `questions-for-poc.md` 的影響
 
 | 題 | 本機模擬器的答案 | 還要不要問 |

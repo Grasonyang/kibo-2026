@@ -12,11 +12,14 @@
 ## 已在本機模擬器驗證（2026-11-10）
 
 - 節點啟動、收到 `/ib2_user/start`、整場飛完並完成回報；normal 8 點全 Lv3。
-- `use_sim_time` 為真；`/sensor_fusion/navigation` 的 `header.stamp` 有值（比現在晚約 0.11 秒），frame 是 `iss_body`，約 13 Hz。
+- `use_sim_time` 為真；`/sensor_fusion/navigation` 的 `header.stamp` 有值（比現在晚約 0.11 秒），frame 是 `iss_body`，約 200 Hz。
 - 影像 `/camera_main/image_raw` 是 800x800、`rgb8`。
 - `/ctl/command` 從 STAND_BY（剛起跑）直接送 `MOVE_TO_ABSOLUTE_TARGET` 可以，不用先 RELEASE。
 - 自判等級與官方 `result.json` 一致。
 - 起跑時服務呼叫卡 5 秒的問題與修法（`RES_OPTIONS=single-request`）寫在 `user_node.py` 開頭。
+- **起跑前要等評分模組連上事件 topic**（`_wait_for_event_listener`），否則「任務開始」會遺失、整場沒有成績。
+  每次改動後都要看 `judge_module_logs/result.json`，不能只看節點自己的 log。
+- 相機偵測得到 marker（`DICT_4X4_50`），但深度與導航差約 15 cm，相機修正維持關閉。
 
 還沒驗證：相機修正（預設關）、`/ib2_user/stop` 的中途停止、Web 模擬器。
 
