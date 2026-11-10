@@ -11,7 +11,9 @@ from typing import Any, Iterable, Sequence
 RECORDER_HINTS: Sequence[str] = ("rosbag", "record")
 
 
-def topic_has_listener(bus_info: Any, topic: str, ignore: Iterable[str] = RECORDER_HINTS) -> bool:
+def topic_has_listener(
+    bus_info: Any, topic: str, ignore: Iterable[str] = RECORDER_HINTS, must_contain: str = ""
+) -> bool:
     """`bus_info` 裡有沒有 `topic` 的、已建立的對外連線（不算錄資料的節點）。
 
     格式不對的列一律略過；整個東西不是清單就當作沒有。"""
@@ -26,6 +28,8 @@ def topic_has_listener(bus_info: Any, topic: str, ignore: Iterable[str] = RECORD
         peer = str(row[1])
         if any(hint in peer for hint in hints):
             continue
+        if must_contain and must_contain not in peer:
+            continue  # 狀態顯示、飛行記錄也訂閱同一個 topic，可能比評分模組早連上
         if len(row) > 5 and not row[5]:
             continue
         return True

@@ -75,6 +75,7 @@ IMAGE_FRESH_SEC = 1.0
 POLL_SEC = 0.2
 EVENT_NODE = "/krpc_api_node"  # 官方的事件 API 節點
 EVENT_TOPIC = "/gs/data"  # 它把 mission_start 等事件轉發到這個 topic，評分模組在聽
+EVENT_LISTENER_HINT = "judge"  # 要等的是評分模組（/kibo_rpc_judge），不是狀態顯示或飛行記錄
 EVENT_LINK_TIMEOUT_SEC = 10.0  # 等「有人在聽」的上限
 EVENT_LINK_MAX_POLLS = int(EVENT_LINK_TIMEOUT_SEC / POLL_SEC) + 2
 
@@ -273,7 +274,7 @@ class RosRobot(Robot):
             except Exception as exc:  # 查不到（例如實機沒有這個節點）就不等
                 rospy.loginfo("event listener check unavailable (%s); not waiting", exc)
                 return
-            if topic_has_listener(links, EVENT_TOPIC):
+            if topic_has_listener(links, EVENT_TOPIC, must_contain=EVENT_LISTENER_HINT):
                 rospy.loginfo(
                     "event listener connected after %.1fs: %s",
                     rospy.get_time() - started,

@@ -40,3 +40,11 @@ def test_old_style_rows_without_the_connected_flag_count():
 def test_garbage_is_treated_as_nobody_listening():
     assert not topic_has_listener(None, TOPIC)
     assert not topic_has_listener([None, "x", [1, 2]], TOPIC)
+
+
+def test_other_listeners_do_not_stand_in_for_the_judge():
+    # 2026-11-10 批次的 normal 場：飛行記錄與狀態顯示先連上，評分模組還沒，開始事件一樣遺失。
+    recorder = [6, "/krpc_flight_recorder", "o", "TCPROS", TOPIC, True]
+    indicator = [7, "/krpc_status_indicator", "o", "TCPROS", TOPIC, True]
+    assert not topic_has_listener([recorder, indicator], TOPIC, must_contain="judge")
+    assert topic_has_listener([recorder, indicator, JUDGE], TOPIC, must_contain="judge")
