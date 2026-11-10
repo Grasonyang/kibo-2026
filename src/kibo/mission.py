@@ -200,12 +200,15 @@ class _Run:
         self.robot.log("[t=%.1f %6.1fs left] %s" % (self.robot.now(), self.remaining(), message))
 
     def current_pose(self) -> Optional[Pose]:
-        """幾次都讀不到導航資料就回 None；呼叫端自己決定怎麼辦，不假裝知道位置。"""
+        """幾次都讀不到導航資料就回 None；呼叫端自己決定怎麼辦，不假裝知道位置。
+        已經進到時限前的收尾保留就只讀一次，不等。"""
         for _ in range(self.cfg.pose_attempts):
             pose = self.robot.pose()
             if pose is not None:
                 self.last_pose = pose
                 return pose
+            if self.remaining() < self.cfg.finish_reserve_sec:
+                break
             self.robot.sleep(self.cfg.settle_interval_sec)
         self.log("no navigation data")
         return None
@@ -227,7 +230,8 @@ class _Run:
         """規劃時每一點要留幾秒停留：設定值，或最近三點實際停留秒數的中位數，取大的。
 
         到點一直不穩時，一點會花到十幾秒（等到逾時、再移動一次、再等）；預算若還照 1 秒估，
-        後面的點會排得太滿，最後擠掉 Goal。只往上修，不會比設定值小。
+        後面的點會排得太滿，最後擠掉 Goal。不會比設定值小，但會跟著最近三點升降
+        （council 的裁決原文是「只增不減」；照字面做的話，一次離群值會拖累整場，見 issue #16）。
 
         用中位數而不是平均：只有一點特別久（第一次通知卡了幾秒、某一點剛好不穩）不該讓之後
         每一點都多留那麼久，那會白白刪掉來得及的點；連續兩點都久才採用。還沒有三點時，
@@ -250,7 +254,7 @@ class _Run:
     def move_timeout(
         self, target: Optional[Pose] = None, limit_sec: Optional[float] = None
     ) -> float:
-        """至少 move_timeout_sec，長腿放大到估計秒數的三倍；不超過 limit_sec，
+        """一般是 move_timeout_sec，長腿放大到估計秒數的三倍；不超過 limit_sec，
         也不越過時限前的收尾保留（逾時後還要取消、回報、送完成回報）。回傳值可能很小甚至是負的：
         代表已經沒有時間移動，由呼叫端決定不送。
 

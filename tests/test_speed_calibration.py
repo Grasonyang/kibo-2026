@@ -75,20 +75,6 @@ def test_fifteen_percent_slower_is_outside_the_deadband():
     assert any("speed calibrated" in line and "x1.15" in line for line in robot.logs)
 
 
-def test_the_short_move_that_refines_a_point_is_not_calibration_evidence():
-    # 修正用的再移動，起點是一筆沒穩定的讀數，算出來的預測秒數不可信：曾經因為一段
-    # 「預測 14 秒、實際 4.5 秒」的再移動，把已經校正到 1.17 的速度拉回 1.00，Goal 那一段就估短了。
-    from test_time_safety import NeverSteady
-
-    slow = FakeRobotConfig(position_noise_m=0.01, speeds=Speeds(slowdown=1.2))
-    for seed in range(6):
-        robot = NeverSteady(random_checkpoints_message(8, seed), slow, seed)
-        run_mission(robot, DEFAULT_MISSION)
-        calibrated = [line for line in robot.logs if "speed calibrated" in line]
-        assert calibrated
-        assert not any("-> 1.00" in line for line in calibrated)
-
-
 def test_long_leg_gets_a_longer_timeout(three_point_message):
     # 假機器人比模型慢 4 倍（規劃也知道）：一段腿要 120 幾秒，固定 60 s 的逾時會失敗；
     # 逾時跟著估計放大才成功。時間只夠兩段，所以 #1 會被放棄，看 #6。

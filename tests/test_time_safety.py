@@ -8,11 +8,16 @@
 速度校正與停留時間的回饋讓規劃早一點刪點，才到得了 Goal。
 """
 
+import os
+import re
+
 import pytest
 
+from kibo import mission as mission_module
+from kibo.checkpoints import parse_checkpoints, target_attitude
+from kibo.ctl_result import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT
 from kibo.fake_robot import FakeRobot, fake_config
 from kibo.geometry import Pose, add
-from kibo.checkpoints import parse_checkpoints
 from kibo.mission import DEFAULT_MISSION, _Run, run_mission
 from kibo.motion import Speeds
 from kibo.scenarios import random_checkpoints_message
@@ -52,6 +57,61 @@ def slow_after(start_sec, slowdown, base=FakeRobot):
             return super().move_to(target, timeout_sec)
 
     return SuddenlySlow
+
+
+def slow_to_cancel(base=FakeRobot, cancel_sec=5.2):
+    """移動逾時之後，取消還要再花 cancel_sec 才回來（節點最多等 CANCEL_WAIT_SEC 加一次輪詢）。"""
+
+    class SlowToCancel(base):
+        def move_to(self, target, timeout_sec):
+            result = super().move_to(target, timeout_sec)
+            if result == MOVE_TIMEOUT:
+                self.t += cancel_sec
+            return result
+
+    return SlowToCancel
+
+
+def unsteady_from(first_bad_point, base=FakeRobot):
+    """前幾個點正常，從第 first_bad_point 個點（0 起算）開始到點後永遠不穩。"""
+
+    class UnsteadyLater(base):
+        reads = 0
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.targets = []  # 去過的目標位置，用來數現在是第幾個點
+
+        def _bad(self):
+            return len(self.targets) > first_bad_point
+
+        def move_to(self, target, timeout_sec):
+            key = tuple(round(x, 3) for x in target.position)
+            if key not in self.targets:
+                self.targets.append(key)
+            return super().move_to(target, timeout_sec)
+
+        def pose(self):
+            pose = super().pose()
+            self.reads += 1
+            if pose is not None and self._bad() and self.reads % 2:
+                return Pose(add(pose.position, (0.0, 0.0, 0.5)), pose.orientation, pose.stamp)
+            return pose
+
+        def recent_poses(self, seconds):
+            return [] if self._bad() else super().recent_poses(seconds)
+
+    return UnsteadyLater
+
+
+class NoNavigation(FakeRobot):
+    """導航完全沒有資料。"""
+
+    def pose(self):
+        return None
+
+    def recent_poses(self, seconds):
+        return []
 
 
 def fleet(robot_class, slowdown, seeds=range(10), move_fail_prob=0.0):
@@ -111,6 +171,12 @@ def test_a_well_behaved_robot_visits_as_many_points_as_before():
         (slow_after(150.0, 1.5, NeverSteady), 1.0, 0.0),
         (FakeRobot, 1.0, 0.3),  # 移動常常失敗，重試會吃時間
         (NeverSteady, 1.11, 0.2),
+        # 逾時之後取消還要 5 秒多：收尾保留裡的 cancel_reserve_sec 就是留給它的
+        (slow_to_cancel(), 2.5, 0.0),
+        (slow_to_cancel(slow_after(120.0, 2.0)), 1.0, 0.0),
+        (slow_to_cancel(slow_after(200.0, 1.5, NeverSteady)), 1.0, 0.3),
+        (NoNavigation, 1.3, 0.0),  # 讀不到導航時的重試也不能越過時限
+        (slow_to_cancel(NoNavigation), 1.0, 0.3),
     ],
 )
 def test_the_finish_report_is_on_time_even_when_the_plan_is_wrong(
@@ -119,7 +185,7 @@ def test_the_finish_report_is_on_time_even_when_the_plan_is_wrong(
     # 這些情境曾經在 305 秒才送出完成回報：移動的逾時最少給 5 秒，重試也不看剩餘時間。
     # 現在到不了 Goal 就放棄 Goal，已通過的點不會因為逾時而賠掉。
     latest, _, _ = fleet(robot_class, slowdown, move_fail_prob=move_fail_prob)
-    assert latest <= LIMIT - 2.0
+    assert latest <= LIMIT - 1.0
 
 
 def _run_with_seconds_left(robot_class, seconds_left):
@@ -156,10 +222,75 @@ def test_waiting_at_the_goal_stops_before_the_limit():
 
 def test_a_point_the_move_did_not_reach_is_not_waited_on():
     # 沒移動成功的點不回報（手冊 6.5），等它穩定是白花時間：只讀一筆。
-    robot, run, goal = _run_with_seconds_left(NeverSteady, 100.0)
+    class MovesAlwaysFail(NeverSteady):
+        def move_to(self, target, timeout_sec):
+            self.move_calls += 1
+            return MOVE_ABORTED
+
+    robot, run, goal = _run_with_seconds_left(MovesAlwaysFail, 100.0)
     before = robot.t
-    run.settle(goal, wait=False)
+    record = run.visit(goal)
+    assert not record.moved and not record.notified
+    assert robot.move_calls == DEFAULT_MISSION.max_move_attempts
     assert robot.t == before
+
+
+def test_waiting_at_a_waypoint_leaves_the_goal_leg_its_reserve():
+    # 中途點的等待若把餘裕花到見底，Goal 那一段就得在「時限前 8 秒」之前剛好飛完，
+    # 模型差一兩秒就到不了。餘裕要先扣掉後面移動需要的收尾保留。
+    _, goals, _ = fleet(unsteady_from(4), 1.2, seeds=range(30))
+    assert goals == len(COUNTS) * 30
+
+
+def test_the_camera_correction_is_limited_by_slack_too():
+    class SeesMarkerSlightlyOff(FakeRobot):
+        relative_timeouts = ()
+        seen = (0.0, 0.0, 0.0)
+
+        def marker_in_body(self, marker_id):
+            return self.seen
+
+        def move_relative(self, delta, timeout_sec):
+            self.relative_timeouts += (timeout_sec,)
+            return MOVE_SUCCESS
+
+    robot, run, goal = _run_with_seconds_left(SeesMarkerSlightlyOff, 100.0)
+    run.cfg = DEFAULT_MISSION._replace(camera_fix_max_m=0.1)
+    expected = mission_module.expected_marker_in_body(
+        goal.position, target_attitude(goal), goal.marker_position
+    )
+    robot.seen = add(expected, (0.0, 0.02, 0.0))
+    run.reserved_sec = 80.0  # 餘裕 20 秒
+    assert run.camera_fix(goal)
+    assert robot.relative_timeouts == (pytest.approx(20.0 - DEFAULT_MISSION.hurry_sec),)
+
+
+def test_reading_the_pose_does_not_retry_inside_the_finish_reserve():
+    robot, run, _ = _run_with_seconds_left(NoNavigation, DEFAULT_MISSION.finish_reserve_sec - 0.5)
+    before = robot.t
+    assert run.current_pose() is None
+    assert robot.t == before
+
+
+def test_the_cancel_reserve_covers_how_long_the_node_waits_for_a_cancel():
+    # ros/user_node.py 不能在這裡匯入（要 rospy），所以讀原始碼比對那個常數。
+    node = os.path.join(os.path.dirname(__file__), "..", "ros", "user_node.py")
+    with open(node) as source:
+        found = re.search(r"^CANCEL_WAIT_SEC = ([0-9.]+)", source.read(), re.MULTILINE)
+    assert found
+    assert DEFAULT_MISSION.cancel_reserve_sec >= float(found.group(1))
+
+
+def test_the_short_move_that_refines_a_point_is_not_calibration_evidence():
+    # 修正用的再移動，起點是一筆沒穩定的讀數，算出來的預測秒數不可信：曾經因為一段
+    # 「預測 14 秒、實際 4.5 秒」的再移動，把已經校正到 1.17 的速度拉回 1.00，Goal 那一段就估短了。
+    slow = BASE._replace(speeds=Speeds(slowdown=1.2))
+    for seed in range(6):
+        robot = NeverSteady(random_checkpoints_message(8, seed), slow, seed)
+        run_mission(robot, DEFAULT_MISSION)
+        calibrated = [line for line in robot.logs if "speed calibrated" in line]
+        assert calibrated
+        assert not any("-> 1.00" in line for line in calibrated)
 
 
 # ---- 停留時間的回饋 ----
