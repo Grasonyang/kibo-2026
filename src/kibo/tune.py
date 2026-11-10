@@ -26,7 +26,7 @@ def variants() -> List[Variant]:
     base = DEFAULT_MISSION
     budget = base.budget
     return [
-        Variant("預設（保險 15s，穩定 1.5s）", base),
+        Variant("預設（保險 15s，穩定 1s）", base),
         Variant("不校正速度", base._replace(calibrate_speed=False)),
         Variant("保險 5s", base._replace(budget=budget._replace(margin_sec=5.0))),
         Variant("保險 30s", base._replace(budget=budget._replace(margin_sec=30.0))),

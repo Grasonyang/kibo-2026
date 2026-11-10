@@ -69,6 +69,13 @@ class Robot(ABC):
     def stop_requested(self) -> bool:
         return False
 
+    def recent_poses(self, seconds: float) -> List[Pose]:
+        """最近 seconds 秒內收到的導航資料，舊的在前，每筆都要有 stamp；沒有紀錄就回空清單（選用）。
+
+        移動的 action 還沒回來時機器人其實已經停在目標附近幾秒了；有這段紀錄，
+        「在容差內待滿 1 秒」就不用從 action 回來才開始數。"""
+        return []
+
     def marker_in_body(self, marker_id: int) -> Optional[Vec3]:
         """相機看到的 marker 中心在機體座標系的位置；沒有相機或沒看到就回 None（選用）。"""
         return None
@@ -270,6 +277,9 @@ class _Run:
         同一筆導航資料只算一次：若 stamp 沒變，不計入連續次數，免得導航更新慢時
         把同一筆讀五次當成「穩定 1 秒」。
         """
+        already = self.settled_already(cp)
+        if already is not None:
+            return already
         deadline = self.robot.now() + self.cfg.settle_timeout_sec
         streak = 0
         last: Optional[Judgement] = None
@@ -291,6 +301,30 @@ class _Run:
                 return Settled(last, True)
             self.robot.sleep(self.cfg.settle_interval_sec)
         return Settled(last, False)
+
+    def settled_already(self, cp: Checkpoint) -> Optional[Settled]:
+        """移動尾段的導航紀錄若顯示已經連續達標夠久，直接算穩定；否則回 None，照常等。
+
+        「夠久」與 settle 迴圈同一個標準：settle_samples 筆以上、頭尾相隔至少
+        (settle_samples - 1) x settle_interval_sec（預設 1 秒），而且每一筆都達標。"""
+        window = (self.cfg.settle_samples - 1) * self.cfg.settle_interval_sec
+        history = self.robot.recent_poses(window + self.cfg.settle_interval_sec)
+        stamped = [p for p in history if p.stamp is not None]
+        if len(stamped) < self.cfg.settle_samples:
+            return None
+        newest, oldest = stamped[-1].stamp, stamped[0].stamp
+        if newest is None or oldest is None or newest - oldest < window:
+            return None
+        if self.robot.now() - newest > self.cfg.settle_interval_sec:
+            return None  # 紀錄不夠新，不能代表現在
+        required = self.required_level()
+        last: Optional[Judgement] = None
+        for pose in stamped:
+            last = judge(pose, cp, self.cfg.camera_offset_m)
+            if last.level < required:
+                return None
+        self.last_pose = stamped[-1]
+        return Settled(last, True)
 
     def move(self, cp: Checkpoint, attempts: int) -> bool:
         target = Pose(cp.position, target_attitude(cp))

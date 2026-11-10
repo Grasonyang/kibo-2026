@@ -14,6 +14,7 @@ ROS 訊息 <-> kibo 的 Pose 與 MOVE_* 結果。決策全部在 kibo.mission。
 映像裡的 `python` 是 2.7）。
 """
 
+import collections
 import os
 import sys
 import threading
@@ -65,6 +66,7 @@ ACTION_SERVER_TIMEOUT_SEC = 10.0
 NOTIFY_TIMEOUT_SEC = 15.0
 CANCEL_WAIT_SEC = 5.0
 NAV_FRESH_SEC = 1.0  # 導航資料比這舊就當作沒有
+NAV_HISTORY_LEN = 64  # 導航約 13 Hz，64 筆約 5 秒，夠看「到點前最後 1 秒」
 IMAGE_FRESH_SEC = 1.0
 POLL_SEC = 0.2
 
@@ -76,6 +78,7 @@ ACTION_STOPPED = "stopped"
 class RosRobot(Robot):
     def __init__(self):
         self._nav = None  # 最新的 Navigation 訊息
+        self._nav_history = collections.deque(maxlen=NAV_HISTORY_LEN)  # 最近幾秒的 Pose
         self._nav_count = 0
         self._init_time = rospy.get_time()
         self._nav_lock = threading.Lock()
@@ -129,6 +132,11 @@ class RosRobot(Robot):
         p = nav.pose.pose.position
         q = nav.pose.pose.orientation
         return Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=nav.pose.header.stamp.to_sec())
+
+    def recent_poses(self, seconds):
+        oldest = rospy.get_time() - seconds
+        with self._nav_lock:
+            return [pose for pose in self._nav_history if pose.stamp >= oldest]
 
     def move_to(self, target, timeout_sec):
         if not self._command.wait_for_server(rospy.Duration(ACTION_SERVER_TIMEOUT_SEC)):
@@ -240,9 +248,13 @@ class RosRobot(Robot):
 
     # ---- 內部 ----
     def _on_nav(self, msg):
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        pose = Pose((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), stamp=msg.pose.header.stamp.to_sec())
         with self._nav_lock:
             self._nav = msg
             self._nav_count += 1
+            self._nav_history.append(pose)
 
     def _on_image(self, msg):
         with self._image_lock:

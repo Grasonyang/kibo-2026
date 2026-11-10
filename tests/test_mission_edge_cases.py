@@ -192,3 +192,58 @@ def test_camera_fix_is_off_by_default_even_when_the_robot_has_a_camera(three_poi
     robot = DriftingCameraRobot(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)
     assert robot.relative_calls == 0
+
+
+class HistoryRobot(FakeRobot):
+    """移動回來時，手上已經有最近一段導航紀錄（真機器人在 action 的尾段一直在收）。"""
+
+    history_offset = (0.0, 0.0, 0.0)  # 紀錄裡最舊那筆相對現在位置的偏移
+    recent_calls = 0
+
+    def recent_poses(self, seconds):
+        self.recent_calls += 1
+        here = self.true_pose
+        stamps = [self.t - seconds + 0.1 * k for k in range(int(seconds / 0.1) + 1)]
+        poses = [Pose(here.position, here.orientation, stamp=s) for s in stamps]
+        oldest = add(here.position, self.history_offset)
+        poses[0] = Pose(oldest, here.orientation, stamp=stamps[0])
+        return poses
+
+
+class DriftedHistoryRobot(HistoryRobot):
+    history_offset = LOST_35CM  # 一秒前還在容差外：剛到，還沒穩
+
+
+def _seconds_between_arrival_and_report(robot, checkpoint_id):
+    import re
+
+    left = {}
+    for line in robot.logs:
+        m = re.match(r"\[t=([\d.]+) ", line)
+        if m and "move to #%d attempt 1: success" % checkpoint_id in line:
+            left["moved"] = float(m.group(1))
+        if m and "checkpoint #%d accepted" % checkpoint_id in line:
+            left["accepted"] = float(m.group(1))
+    return left["accepted"] - left["moved"]
+
+
+def test_a_second_already_spent_in_tolerance_before_the_move_returned_counts(three_point_message):
+    # 尾段紀錄顯示已經在 Lv3 內待滿 1 秒：不用再等一秒，直接回報（只剩通知本身的 0.3 秒）。
+    robot = HistoryRobot(three_point_message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert all(v.stable and v.notified and v.judged_level == 3 for v in report.visits)
+    assert _seconds_between_arrival_and_report(robot, 1) < 0.5
+
+
+def test_without_history_the_robot_still_waits_its_own_second(three_point_message):
+    robot = FakeRobot(three_point_message, PERFECT)
+    run_mission(robot, DEFAULT_MISSION)
+    assert _seconds_between_arrival_and_report(robot, 1) >= 1.0
+
+
+def test_history_that_was_outside_tolerance_a_second_ago_does_not_count(three_point_message):
+    robot = DriftedHistoryRobot(three_point_message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert robot.recent_calls > 0
+    assert all(v.stable and v.notified for v in report.visits)
+    assert _seconds_between_arrival_and_report(robot, 1) >= 1.0
