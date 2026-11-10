@@ -26,6 +26,7 @@ Claude 與 Codex 都有三個標準 agent：planner、worker、reviewer。職責
 
 ## 專案背景
 第 7 屆 Kibo-RPC：為 ISS 的 Int-Ball2 寫 ROS 任務程式。規則摘要在 `docs/kibo/rules.md`，API 在 `docs/kibo/api.md`，用語在 `GLOSSARY.md`。
+官方模擬器實際怎麼評分、怎麼出題、哪裡會讓整場沒有成績：`docs/kibo/simulator-internals.md`；一次移動要幾秒與各場實測：`docs/kibo/motion-model.md`。
 - 語言只用 **Python**，執行環境是 **3.6.9／ROS 1 Melodic**（`docs/adr/0001-python-for-ros-melodic.md`）。`src/` 的程式不能用 3.7 以後的特性，不能依賴映像沒有的套件。
 - 官方範本中標 `DO NOT REMOVE` 的 `/ib2_user/start`、`/ib2_user/stop`、`/ib2_user/ready` 不得移除。
 - 只改 `krpc_user/` 與 `src/`；解壓後的 `sim/` 內其他目錄是官方基礎設施，不改。
