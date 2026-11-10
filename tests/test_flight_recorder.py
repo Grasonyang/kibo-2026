@@ -131,3 +131,24 @@ def test_a_robot_without_a_camera_just_says_the_marker_was_not_seen(three_point_
     report = run_mission(robot, DEFAULT_MISSION)
     assert any("marker #1 not seen" in line for line in robot.logs)
     assert report.goal_reached
+
+
+def test_sim_report_can_still_find_the_legs_in_the_log(three_point_message):
+    # scripts/sim_report.py 靠這兩種 log 行切出每段腿；log 的字改了，它會悄悄什麼都找不到。
+    import importlib.util
+    import os
+
+    path = os.path.join(os.path.dirname(__file__), "..", "scripts", "sim_report.py")
+    spec = importlib.util.spec_from_file_location("sim_report", path)
+    assert spec is not None and spec.loader is not None
+    sim_report = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sim_report)
+
+    robot = FakeRobot(three_point_message, PERFECT)
+    report = run_mission(robot, DEFAULT_MISSION)
+    starts = [line for line in robot.logs if sim_report.LEG_START.search(line)]
+    ends = [sim_report.LEG_END.search(line) for line in robot.logs]
+    ends = [m for m in ends if m]
+    assert len(starts) == 3 and len(ends) == 3
+    assert [int(m.group(2)) for m in ends] == [v.checkpoint_id for v in report.visits]
+    assert all(m.group(3) == "success" for m in ends)

@@ -15,6 +15,7 @@ from kibo.geometry import Pose, Quat, Vec3, add, axis_angle_quat, normalize, qua
 from kibo.judge import judge
 from kibo.mission import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT, Robot
 from kibo.motion import Speeds, leg_seconds
+from kibo.navlog import NavLog
 from kibo.scoring import DEFAULT_SCORING, Scoring
 from kibo.vision import expected_marker_in_body
 
@@ -28,6 +29,9 @@ class FakeRobotConfig(NamedTuple):
     move_fail_prob: float = 0.0
     checkpoints_fail_times: int = 0  # 前幾次 get_checkpoints 故意失敗
     notify_sec: float = 0.3  # 一次通過通知來回的時間
+    # 移動回報成功之前，機器人已經在目標上停了幾秒（這段會留在導航紀錄裡）。模擬器實測約 1.5 秒；
+    # 預設 0 = 沒有尾段紀錄，任務邏輯要自己等滿 1 秒。
+    settled_before_return_sec: float = 0.0
     scoring: Scoring = DEFAULT_SCORING
     start_pose: Pose = START_POSE
     camera: bool = False  # 開了才會回 marker_in_body
@@ -66,6 +70,7 @@ class FakeRobot(Robot):
         self.checkpoints_calls = 0
         self.logs: List[str] = []
         self.stop = False
+        self.navlog = NavLog()  # 與真的節點同一種導航紀錄
 
     # ---- Robot 介面 ----
     def now(self) -> float:
@@ -105,7 +110,20 @@ class FakeRobot(Robot):
         )
         wobble = _random_rotation(self.rng, self.cfg.attitude_noise_deg)
         self.true_pose = Pose(add(target.position, noise), quat_mul(target.orientation, wobble))
+        self._record_tail()
         return MOVE_SUCCESS
+
+    def _record_tail(self) -> None:
+        """把「回報成功前已經停在這裡的那幾秒」寫進導航紀錄，每 0.05 秒一筆。"""
+        steps = int(round(self.cfg.settled_before_return_sec / 0.05))
+        if steps <= 0:
+            return
+        for k in range(steps, -1, -1):
+            stamp = self.t - 0.05 * k
+            self.navlog.add(Pose(self.true_pose.position, self.true_pose.orientation, stamp))
+
+    def recent_poses(self, seconds: float) -> List[Pose]:
+        return self.navlog.recent(self.t, seconds)
 
     def marker_in_body(self, marker_id: int) -> Optional[Vec3]:
         """假相機：由真實姿態反推 marker 在機體座標系的位置，加一點雜訊。"""

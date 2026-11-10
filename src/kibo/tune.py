@@ -96,6 +96,7 @@ def main(argv: List[str]) -> int:
         position_noise_m=args.noise,
         move_fail_prob=args.fail,
         speeds=base.speeds._replace(slowdown=args.slowdown),
+        settled_before_return_sec=1.5,  # 模擬器實測：回報成功前已經停了約 1.5 秒
     )
     print(
         "%d 場、%d 點、誤差 %.2fm、失敗率 %.0f%%、比模型慢 %.2f 倍"

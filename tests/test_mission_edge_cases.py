@@ -365,3 +365,18 @@ def test_the_level_3_buffer_does_not_apply_when_only_level_2_is_wanted():
     assert [v.judged_level for v in report.visits] == [2, 2, 2]
     assert all(v.stable for v in report.visits)
     assert _seconds_between_arrival_and_report(robot, 12) < 2.0
+
+
+def test_a_fake_robot_that_stopped_before_the_move_returned_is_reported_at_once(
+    three_point_message,
+):
+    # 模擬器實測：action 回報成功前，機器人通常已經在目標上停了 1.5 秒左右。
+    settled_early = PERFECT._replace(settled_before_return_sec=1.5)
+    robot = FakeRobot(three_point_message, settled_early)
+    report = run_mission(robot, DEFAULT_MISSION)
+    assert all(v.stable and v.judged_level == 3 for v in report.visits)
+    assert _seconds_between_arrival_and_report(robot, 1) < 0.5
+    # 停得不夠久（0.5 秒）就還是要自己等滿
+    barely = FakeRobot(three_point_message, PERFECT._replace(settled_before_return_sec=0.5))
+    run_mission(barely, DEFAULT_MISSION)
+    assert _seconds_between_arrival_and_report(barely, 1) >= 1.0
