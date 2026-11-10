@@ -34,8 +34,11 @@ extend-exclude = ["krpc_user/scripts/user_template.py"]
 select = ["E", "F", "I", "B"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "ros"]
 extraPaths = ["src"]
+# ros/ 的 rospy 等套件本機沒有；關掉「找不到 import」，其餘（例如呼叫了沒定義的方法）照查。
+reportMissingImports = false
+reportMissingModuleSource = false
 pythonVersion = "3.8"
 typeCheckingMode = "standard"
 

@@ -72,3 +72,38 @@ def test_expected_marker_position_uses_body_frame():
 def test_correction_moves_toward_where_the_marker_should_be():
     # marker 預期在前方 0.5 m，實際看到在 0.6 m：我們太遠，要往前 0.1 m
     assert body_correction((0.6, 0.0, 0.0), (0.5, 0.0, 0.0)) == pytest.approx((0.1, 0.0, 0.0))
+
+
+def test_raw_bgr8_image_with_row_padding_becomes_grayscale():
+    # 2x2 的 bgr8，每列多 2 個位元組的填充（step 8 > 寬 2 x 3）。純藍、純綠、純紅、白。
+    from kibo.vision import gray_from_raw
+
+    row0 = bytes([255, 0, 0, 0, 255, 0, 9, 9])
+    row1 = bytes([0, 0, 255, 255, 255, 255, 9, 9])
+    gray = gray_from_raw(row0 + row1, width=2, height=2, step=8, encoding="bgr8")
+    assert gray is not None
+    assert gray.shape == (2, 2) and gray.dtype == np.uint8
+    assert gray.tolist() == [[29, 150], [76, 255]]  # 0.114、0.587、0.299 乘 255，四捨五入
+
+
+def test_raw_rgb8_swaps_the_channels():
+    from kibo.vision import gray_from_raw
+
+    gray = gray_from_raw(bytes([255, 0, 0]), width=1, height=1, step=3, encoding="rgb8")
+    assert gray is not None
+    assert gray.tolist() == [[76]]
+
+
+def test_raw_mono8_is_passed_through():
+    from kibo.vision import gray_from_raw
+
+    gray = gray_from_raw(bytes([1, 2, 3, 4]), width=2, height=2, step=2, encoding="mono8")
+    assert gray is not None
+    assert gray.tolist() == [[1, 2], [3, 4]]
+
+
+def test_unknown_encoding_or_short_buffer_gives_none():
+    from kibo.vision import gray_from_raw
+
+    assert gray_from_raw(bytes(4), width=2, height=2, step=2, encoding="yuv422") is None
+    assert gray_from_raw(bytes(3), width=2, height=2, step=2, encoding="mono8") is None

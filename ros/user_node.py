@@ -50,7 +50,7 @@ from kibo.mission import (
     Robot,
     run_mission,
 )
-from kibo.vision import observe_markers
+from kibo.vision import gray_from_raw, observe_markers
 
 SERVICE_TIMEOUT_SEC = 10.0  # 等服務出現，以及等它回應，各自的上限
 SERVICE_POLL_SEC = 0.05
@@ -91,8 +91,13 @@ class RosRobot(Robot):
         self._image = None
         self._camera_info = None
         self._image_lock = threading.Lock()
-        self._image_sub = rospy.Subscriber("/camera_main/image_raw", Image, self._on_image)
-        self._info_sub = rospy.Subscriber("/camera_main/camera_info", CameraInfo, self._on_info)
+        # 只留最新一張：影像很大，排隊只會讓我們看到舊畫面
+        self._image_sub = rospy.Subscriber(
+            "/camera_main/image_raw", Image, self._on_image, queue_size=1, buff_size=2**24
+        )
+        self._info_sub = rospy.Subscriber(
+            "/camera_main/camera_info", CameraInfo, self._on_info, queue_size=1
+        )
 
     # ---- Robot 介面 ----
     def now(self):
@@ -232,6 +237,21 @@ class RosRobot(Robot):
         with self._nav_lock:
             self._nav = msg
             self._nav_count += 1
+
+    def _on_image(self, msg):
+        with self._image_lock:
+            self._image = msg
+
+    def _on_info(self, msg):
+        with self._image_lock:
+            self._camera_info = msg
+
+    @staticmethod
+    def _to_gray(image):
+        gray = gray_from_raw(image.data, image.width, image.height, image.step, image.encoding)
+        if gray is None:
+            rospy.logwarn("unsupported image: encoding=%s step=%d", image.encoding, image.step)
+        return gray
 
     def _on_ctl(self, msg):
         """/ctl/status 的 type 是 CtlStatusType，裡面才是 int32 type（手冊 6.3.2）。
