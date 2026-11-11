@@ -9,7 +9,7 @@ from kibo.checkpoints import parse_checkpoints
 from kibo.field import MARKERS, SAFE_AREA_MAX, SAFE_AREA_MIN
 from kibo.geometry import Pose, angle_between, distance, forward, rotate, sub
 from kibo.judge import judge
-from kibo.scenarios import LEVEL_COUNTS, random_checkpoints_message
+from kibo_lab.scenarios import LEVEL_COUNTS, random_checkpoints_message
 
 SEEDS = range(40)
 

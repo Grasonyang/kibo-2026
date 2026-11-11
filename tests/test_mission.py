@@ -1,18 +1,18 @@
 import pytest
 
 from conftest import PERFECT
-from kibo.fake_robot import FakeRobot
 from kibo.mission import DEFAULT_MISSION, run_mission
 from kibo.motion import Speeds
-from kibo.scenarios import random_checkpoints_message
+from kibo_lab.fake_robot import FakeRobot
+from kibo_lab.scenarios import random_checkpoints_message
 
 
 def test_perfect_robot_passes_every_checkpoint_at_level_3(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT)
     report = run_mission(robot, DEFAULT_MISSION)
     assert report.finished and report.goal_reached
-    assert sorted(robot.passed_ids) == [1, 6, 12]
-    assert robot.passed_levels == [3, 3, 3]
+    assert sorted(robot.judge.passed_ids) == [1, 6, 12]
+    assert robot.judge.passed_levels == [3, 3, 3]
     assert report.dropped == []
     assert report.elapsed_sec < 300.0
 
@@ -21,9 +21,9 @@ def test_score_rewards_remaining_time(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)
     # 三個 Lv3（30 分）加 Goal（20 分），再乘上「1 + 剩餘比例」的倍率。
-    expected = 50.0 * (1.0 + robot.remaining_at_finish() / 300.0)
-    assert robot.score() == pytest.approx(expected)
-    assert 50.0 < robot.score() <= 100.0
+    expected = 50.0 * (1.0 + robot.judge.remaining_at_finish() / 300.0)
+    assert robot.judge.score() == pytest.approx(expected)
+    assert 50.0 < robot.judge.score() <= 100.0
 
 
 def test_moves_that_always_fail_still_end_within_bounds(three_point_message):
@@ -59,7 +59,7 @@ def test_stop_request_ends_the_mission_without_finishing(three_point_message):
     robot.stop = True
     report = run_mission(robot, DEFAULT_MISSION)
     assert report.aborted == "stop requested"
-    assert robot.finished_at is None
+    assert robot.judge.finished_at is None
 
 
 def test_random_scenarios_are_valid_and_reproducible():
@@ -69,4 +69,4 @@ def test_random_scenarios_are_valid_and_reproducible():
     robot = FakeRobot(a, PERFECT, seed=3)
     report = run_mission(robot, DEFAULT_MISSION)
     assert report.goal_reached
-    assert len(robot.passed_ids) == 8
+    assert len(robot.judge.passed_ids) == 8

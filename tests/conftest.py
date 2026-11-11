@@ -9,8 +9,8 @@ import json
 import pytest
 
 from kibo.checkpoints import Checkpoint
-from kibo.fake_robot import FakeRobotConfig
 from kibo.geometry import IDENTITY_QUAT
+from kibo_lab.fake_robot import FakeRobotConfig
 
 # 沒有任何誤差的假機器人：到點分毫不差、導航不抖。測流程時用，免得亂數干擾。
 PERFECT = FakeRobotConfig(position_noise_m=0.0, attitude_noise_deg=0.0, nav_jitter_m=0.0)

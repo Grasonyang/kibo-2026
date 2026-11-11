@@ -1,6 +1,6 @@
 """R3：規則書沒講清楚的兩件事做成開關，分數在四個世界各算一次。"""
 
-from kibo.scoring import WORLDS, Scoring
+from kibo_lab.scoring import WORLDS, Scoring
 
 LEVELS = [3, 3, 2]  # 10 + 10 + 6 = 26 分
 
@@ -23,8 +23,8 @@ def test_timeout_zeroes_everything_in_t0_but_keeps_checkpoints_in_t1():
 
 def test_fake_robot_can_be_scored_in_any_world(three_point_message):
     from conftest import PERFECT
-    from kibo.fake_robot import FakeRobot
     from kibo.mission import DEFAULT_MISSION, run_mission
+    from kibo_lab.fake_robot import FakeRobot
 
     class SkipsOne(FakeRobot):
         def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
@@ -34,7 +34,7 @@ def test_fake_robot_can_be_scored_in_any_world(three_point_message):
 
     robot = SkipsOne(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)
-    assert robot.score(WORLDS["B/T0"]) > robot.score(WORLDS["A/T0"]) > 0.0
+    assert robot.judge.score(WORLDS["B/T0"]) > robot.judge.score(WORLDS["A/T0"]) > 0.0
 
 
 def test_default_scoring_is_the_goal_only_timeout_zero_world():

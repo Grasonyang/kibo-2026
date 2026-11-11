@@ -1,6 +1,6 @@
 """參數掃描：同一批隨機場景，換不同的任務參數，看平均分與最低分。
 
-    uv run python -m kibo.tune --runs 20 --checkpoints 10
+    uv run python -m kibo_lab.tune --runs 20 --checkpoints 10
 
 資格賽取 10 次平均，所以主要看平均；最低分與標準差用來抓「偶爾整場爆掉」。
 四個規則世界並排、算最大後悔，只有名次跨世界不變的結論才算數。
@@ -11,10 +11,10 @@ import argparse
 import sys
 from typing import Dict, List, NamedTuple, Tuple
 
-from kibo.fake_robot import CAMERA_FIX_MAX_M, FakeRobot, FakeRobotConfig, fake_config
 from kibo.mission import DEFAULT_MISSION, MissionConfig, run_mission
-from kibo.scenarios import random_checkpoints_message, valid_count
-from kibo.scoring import WORLD_NAMES, WORLDS
+from kibo_lab.fake_robot import CAMERA_FIX_MAX_M, FakeRobot, FakeRobotConfig, fake_config
+from kibo_lab.scenarios import random_checkpoints_message, valid_count
+from kibo_lab.scoring import WORLD_NAMES, WORLDS
 
 
 class Variant(NamedTuple):
@@ -58,8 +58,8 @@ def evaluate(variant: Variant, runs: int, count: int, seed: int, robot_cfg: Fake
         robot = FakeRobot(random_checkpoints_message(count, seed + i), robot_cfg, seed + i)
         report = run_mission(robot, variant.config)
         for name in WORLD_NAMES:
-            totals[name] += robot.score(WORLDS[name])
-        default_scores.append(robot.score(WORLDS[WORLD_NAMES[0]]))
+            totals[name] += robot.judge.score(WORLDS[name])
+        default_scores.append(robot.judge.score(WORLDS[WORLD_NAMES[0]]))
         goals += 1 if report.goal_reached else 0
     mean = sum(default_scores) / runs
     sd = (sum((s - mean) ** 2 for s in default_scores) / max(runs - 1, 1)) ** 0.5

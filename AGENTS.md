@@ -32,6 +32,7 @@ Claude 與 Codex 都有三個標準 agent：planner、worker、reviewer。職責
 - 只改 `krpc_user/` 與 `src/`；解壓後的 `sim/` 內其他目錄是官方基礎設施，不改。
 - 決賽程式要給 JAXA 審查安全性：迴圈要有次數與時間上限、Action 要有逾時與取消、不做無限重試（手冊第 5 章）。
 - 邏輯寫成純函式放 `src/kibo/` 並用 pytest 測；ROS 節點只做接線。
+- `src/kibo/` 整個目錄會進提交包：節點用不到的模組（假機器人、場景產生器、參數掃描這類本機實驗用的）放 `src/kibo_lab/`，飛行程式不得匯入它。
 
 ## Council
 階段開始前開**開題 council**，每個階段結案後開**檢討 council**，卡住的設計開**設計 council**（`docs/agents/council.md`）。委員是 `council-member` subagent，平行啟動、匿名互評、主席查證後裁決；裁決寫成 Basic Memory decision，使用者確認前 `status: open`。

@@ -67,7 +67,7 @@ Web 模擬器只回結果 JSON 與我們的 log（手冊 4.3.2），**log 寫了
 - `skip_one_waypoint=True`：看 `goal.success` 與 Goal Score → 定 A（需全點）或 B（只需 Goal 點）。
 - `deliberate_late_after=2`：看已過的點分數是否保留、Time Bonus 多少 → 定 T0 或 T1。
 - `notify_even_if_level0=True`：自判 0 分也回報，拿伺服器判定校準 `judge`。
-定了世界就把 `kibo.tune` 對應那一欄當主要依據。
+定了世界就把 `kibo_lab.tune` 對應那一欄當主要依據。
 
 ### 其他要核對的
 

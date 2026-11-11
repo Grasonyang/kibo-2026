@@ -1,7 +1,7 @@
 """本機的「資格賽」：跑很多場隨機場景，印出每場與平均的估計分數。
 
-    uv run python -m kibo.simulate --runs 10 --checkpoints 8
-    uv run python -m kibo.simulate --runs 10 --checkpoints 12 --fail 0.2 --noise 0.08 -v
+    uv run python -m kibo_lab.simulate --runs 10 --checkpoints 8
+    uv run python -m kibo_lab.simulate --runs 10 --checkpoints 12 --fail 0.2 --noise 0.08 -v
 
 分數是假裁判算的，只能相對比較策略，不能當真實成績。
 """
@@ -10,9 +10,9 @@ import argparse
 import sys
 from typing import List, Tuple
 
-from kibo.fake_robot import CAMERA_FIX_MAX_M, FakeRobot, FakeRobotConfig, fake_config
 from kibo.mission import DEFAULT_MISSION, MissionConfig, MissionReport, run_mission
-from kibo.scenarios import random_checkpoints_message, valid_count
+from kibo_lab.fake_robot import CAMERA_FIX_MAX_M, FakeRobot, FakeRobotConfig, fake_config
+from kibo_lab.scenarios import random_checkpoints_message, valid_count
 
 
 def run_once(
@@ -48,14 +48,14 @@ def main(argv: List[str]) -> int:
             camera_fix_max_m=CAMERA_FIX_MAX_M if args.camera else 0.0
         )
         robot, report = run_once(args.seed + i, args.checkpoints, robot_cfg, mission_cfg)
-        score = robot.score()
+        score = robot.judge.score()
         scores.append(score)
         print(
             "run %2d: score %6.1f  levels %s  dropped %s  goal %s  finished at %5.1fs%s"
             % (
                 i + 1,
                 score,
-                robot.passed_levels,
+                robot.judge.passed_levels,
                 report.dropped,
                 "yes" if report.goal_reached else "NO",
                 report.elapsed_sec,

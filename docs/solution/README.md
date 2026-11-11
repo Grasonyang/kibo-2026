@@ -50,19 +50,21 @@
 兩層，中間一個介面：
 
 - **任務邏輯層 `src/kibo/`**：純 Python，不碰 ROS。上面那張表的所有決策都在這。
-  可以在任何電腦用 `pytest` 測。
+  可以在任何電腦用 `pytest` 測。整個目錄會進提交包，所以只放節點用得到的模組。
 - **ROS 接線層 `ros/user_node.py`**：ROS 是機器人的「作業系統」；這層把 ROS 的訊息翻譯成
   任務邏輯看得懂的東西，自己不做決定。只能在 JAXA 的模擬器裡跑。
 - **`Robot` 介面**（`src/kibo/mission.py`）：任務邏輯需要機器人做的事，八個必要方法
   （現在幾點、我在哪、飛去那裡、睡一下、任務開始、要清單、回報通過、回報完成）加幾個選用的（有沒有人叫停、寫 log、最近幾秒的導航紀錄、相機看到的 marker、相對移動）。
-  ROS 版實作一次，**假機器人**（`src/kibo/fake_robot.py`）再實作一次。
+  ROS 版實作一次，**假機器人**（`src/kibo_lab/fake_robot.py`）再實作一次。
 
 為什麼要假機器人：不開模擬器（一場要七分鐘）也能把整場任務跑完，看流程會不會卡、策略參數
-怎麼調。它不是物理模擬：移動秒數用同一個時間模型算、到點有隨機誤差、偶爾失敗，裁判照官方規則。
-分數只能**相對比較**（各等級幾分、時間倍率怎麼算都還沒公布）。
+怎麼調。它不是物理模擬：移動秒數用同一個時間模型算、到點有隨機誤差、偶爾失敗；過不過由
+**假裁判**（`src/kibo_lab/fake_judge.py`）照官方規則記。分數只能**相對比較**（各等級幾分、時間倍率
+怎麼算都還沒公布）。假機器人、假裁判、隨機場景、假設的分數表、參數掃描都在 `src/kibo_lab/`：
+本機實驗用，不進提交包（決賽程式要給 JAXA 審，審的應該只有會飛的那一份）。
 
 讀程式的順序建議：`mission.py`（流程）→ `settle.py`（何時算到了）→ `judge.py`（官方怎麼判）→
-`budget.py` → `planner.py` → `motion.py`（飛一段要幾秒）→ `geometry.py`。每個檔案開頭都有白話說明。
+`budget.py` → `planner.py` → `motion.py`（飛一段要幾秒）→ `pace.py`（實際比模型慢幾倍）→ `geometry.py`。每個檔案開頭都有白話說明。
 ROS 那一側另外有三個不碰 ROS 的小模組：`navlog.py`（導航紀錄）、`ctl_result.py`（移動結果的對照）、
 `buslinks.py`（起跑前確認評分模組連上了）。
 
@@ -71,11 +73,11 @@ ROS 那一側另外有三個不碰 ROS 的小模組：`navlog.py`（導航紀錄
 ```bash
 uv sync --locked                                  # 第一次：裝工具
 uv run pytest                                     # 全部測試，約 2 秒
-uv run python -m kibo.simulate --runs 10 --checkpoints 8        # 假機器人的「資格賽」
-uv run python -m kibo.simulate --runs 1 --checkpoints 6 -v      # 看一場的逐步 log
-uv run python -m kibo.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08   # 刁難它
-uv run python -m kibo.simulate --runs 10 --checkpoints 12 --slowdown 2             # 機器人比模型慢一倍
-uv run python -m kibo.tune --runs 20 --checkpoints 10           # 幾種參數在四個規則世界的平均與最大後悔
+uv run python -m kibo_lab.simulate --runs 10 --checkpoints 8        # 假機器人的「資格賽」
+uv run python -m kibo_lab.simulate --runs 1 --checkpoints 6 -v      # 看一場的逐步 log
+uv run python -m kibo_lab.simulate --runs 5 --checkpoints 12 --fail 0.2 --noise 0.08   # 刁難它
+uv run python -m kibo_lab.simulate --runs 10 --checkpoints 12 --slowdown 2             # 機器人比模型慢一倍
+uv run python -m kibo_lab.tune --runs 20 --checkpoints 10           # 幾種參數在四個規則世界的平均與最大後悔
 ```
 
 一場的 log 長這樣（`-v`），每行開頭是時鐘與剩餘秒數：
@@ -130,7 +132,7 @@ uv run python -m kibo.tune --runs 20 --checkpoints 10           # 幾種參數�
 
 ### 假機器人跑出來的結論，哪些能信
 
-每個結論都要問「換一個規則世界、換一個真實速度，名次還一樣嗎」。`python -m kibo.tune` 把四個規則世界
+每個結論都要問「換一個規則世界、換一個真實速度，名次還一樣嗎」。`python -m kibo_lab.tune` 把四個規則世界
 （Goal 需不需要全點 × 逾時保不保留分數）並排印出來，並算「最大後悔」。
 
 | 結論 | 站得住嗎 | 說明 |

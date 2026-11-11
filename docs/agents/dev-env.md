@@ -27,8 +27,9 @@
 
 | 路徑 | 內容 |
 |---|---|
-| `src/kibo/` | 不依賴 ROS 的純 Python 邏輯（場地資料、路徑規劃、幾何運算），本機可直接單元測試 |
-| `tests/` | pytest；只測 `src/kibo/` |
+| `src/kibo/` | 不依賴 ROS 的純 Python 邏輯（場地資料、路徑規劃、幾何運算），本機可直接單元測試。整個目錄會進提交包：節點用不到的模組不放這裡 |
+| `src/kibo_lab/` | 本機實驗用的工具（假機器人、假裁判、隨機場景、假設的分數表、參數掃描）。不進提交包；`src/kibo/` 與 `ros/` 不得匯入它（`tests/test_flight_package.py`） |
+| `tests/` | pytest；測 `src/kibo/` 與 `src/kibo_lab/` |
 | `krpc_user/` | 提交給模擬器的 catkin package，尚未建立：取得 JAXA 的開發資源後，由 `scripts/setup-sim.sh` 匯入官方範本（見 [docs/kibo/simulator.md](../kibo/simulator.md)） |
 | `sim/` | 解壓後的官方模擬器（不進版控） |
 | `docs/kibo/` | 規則與 API 摘要 |
