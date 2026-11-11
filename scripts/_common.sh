@@ -21,4 +21,11 @@ sync_user() {
   mkdir -p "$user_pkg/scripts"
   rsync -a --exclude 'README.md' "$root/ros/" "$user_pkg/scripts/"
   rsync -a --delete --exclude '__pycache__' "$root/src/kibo/" "$user_pkg/scripts/kibo/"
+  # 記下同步的是哪一版：commit 的短雜湊，有未提交的改動就加 +dirty。節點啟動時印出來，
+  # scripts/sim_report.py 顯示在報表上（格式見 src/kibo/buildstamp.py）。
+  build_stamp="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+    build_stamp="$build_stamp+dirty"
+  fi
+  printf '%s\n' "$build_stamp" > "$user_pkg/scripts/build_stamp.txt"
 }

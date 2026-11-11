@@ -13,6 +13,9 @@ archive="$out_dir/$name.tar.gz"
 # 多排除 __pycache__：那是容器裡的 root 跑過之後留下的，主機刪不掉，也不該送去審查。
 # 包裡有哪些我們的模組由 sync_user 決定（整個 src/kibo/），tests/test_flight_package.py 守著。
 tar -C "$sim_dir/users" --exclude='__pycache__' --exclude='*.pyc' -zcf "$archive" catkin_ws/src
-echo "已產生：$archive"
+echo "已產生：$archive（版本 $build_stamp）"
+case "$build_stamp" in
+  *+dirty) echo "注意：工作目錄有未提交的改動，這一包對不回任何一個 commit。要提交的包請先 commit 再打。" >&2 ;;
+esac
 echo "其中我們的程式（krpc_user/scripts/）："
 tar -tzf "$archive" | sed -n 's|^catkin_ws/src/krpc_user/scripts/\(.*[^/]\)$|  \1|p' | sort

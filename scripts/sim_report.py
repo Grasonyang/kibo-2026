@@ -7,6 +7,10 @@
 讀的是 `sim/krpc7th-simulator/share/logs/<時間戳>/`（位置同 scripts/_common.sh：
 主 checkout 的 sim/，或環境變數 KIBO_SIM_ROOT）。沒有 result.json 的場次（評分模組
 沒收到任務開始，或節點掛了，或還在跑）會標成「無成績」。
+
+「版本」是那一場同步進模擬器的 commit（有未提交的改動時帶 +dirty），節點啟動時印在 log 裡；
+戳記出現之前的場次是 `-`。模擬器自己啟動失敗的場次（docs/kibo/simulator-internals.md 的 E10：
+機器人整場不受控）標成「模擬器啟動失敗」、不列數字：那一場的結果不代表我們的程式，統計時排除。
 """
 
 import argparse
@@ -18,11 +22,19 @@ import subprocess
 import sys
 from typing import Dict, List, Optional, Tuple
 
+from kibo.buildstamp import find_build
 from kibo.geometry import distance, quat_angle
 from kibo.motion import rotation_seconds, translation_seconds
 
 LEG_START = re.compile(r"\[t=([0-9.]+)[^\]]*\] route \[")
 LEG_END = re.compile(r"\[t=([0-9.]+)[^\]]*\] move to #(\d+) attempt 1: (\w+)")
+# 模擬器載入 IB2 模型失敗時 Gazebo 印在 system.log 的那一行（E10）。原文每段字之間夾著終端機的
+# 顏色碼，比對前要先去掉。system.log 一場有幾百 MB，這一行在開機階段（實測在第 325 行、
+# 約 14 KB 處），所以只看開頭一段。這是假設：那一行若出現在這一段之後，報表會把壞掉的場次當成
+# 一般場次列出來，沒有任何訊號。看到「0 點、腿的誤差幾十秒」的場次，先自己去 system.log 找這一行。
+SIM_FAILED = "Sensors failed to initialize when loading model[ib2]"
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+SYSTEM_LOG_HEAD_BYTES = 2 * 1024 * 1024
 
 
 def logs_root() -> str:
@@ -50,8 +62,30 @@ def _seconds(stamp: str) -> float:
     )
 
 
+def _lines(path: str) -> List[str]:
+    """檔案的每一行；讀不到就當作空的。"""
+    try:
+        with open(path, errors="replace") as f:
+            return f.readlines()
+    except OSError:
+        return []
+
+
+def simulator_failed(system_log: str) -> bool:
+    """這一場是不是模擬器自己啟動失敗（E10）。讀不到 system.log 就當作不是。"""
+    try:
+        with open(system_log, "rb") as f:
+            head = f.read(SYSTEM_LOG_HEAD_BYTES).decode("utf-8", "replace")
+    except OSError:
+        return False
+    return SIM_FAILED in ANSI.sub("", head)
+
+
 def read_run(path: str) -> Dict:
     run: Dict = {"name": os.path.basename(path), "legs": []}
+    lines = _lines(os.path.join(path, "user_programs_logs", "user_program_output.log"))
+    run["build"] = find_build(lines)
+    run["sim_failed"] = simulator_failed(os.path.join(path, "judge_module_logs", "system.log"))
     try:
         with open(os.path.join(path, "cheat_sheet.json")) as f:
             cheat = json.load(f)
@@ -75,10 +109,6 @@ def read_run(path: str) -> Dict:
     try:
         with open(os.path.join(path, "judge_module_logs", "localization_history.txt")) as f:
             history = [json.loads(line) for line in f]
-        with open(
-            os.path.join(path, "user_programs_logs", "user_program_output.log"), errors="replace"
-        ) as f:
-            lines = f.readlines()
     except (OSError, ValueError):
         return run
     if not history:
@@ -133,13 +163,17 @@ def main(argv: List[str]) -> int:
     if args.last > 0:
         names = names[-args.last :]
     print(
-        "%-14s %-8s %7s %5s %8s  %s"
-        % ("場", "難度", "通過", "Goal", "完成秒", "腿的誤差（實際-預測）")
+        "%-14s %-14s %-8s %7s %5s %8s  %s"
+        % ("場", "版本", "難度", "通過", "Goal", "完成秒", "腿的誤差（實際-預測）")
     )
     for name in names:
         run = read_run(os.path.join(root, name))
+        build, level = run["build"] or "-", run.get("level", "?")
+        if run["sim_failed"]:
+            print("%-14s %-14s %-8s 模擬器啟動失敗（E10），這一場不算" % (name, build, level))
+            continue
         if "levels" not in run:
-            print("%-14s %-8s 無成績" % (name, run.get("level", "?")))
+            print("%-14s %-14s %-8s 無成績" % (name, build, level))
             continue
         levels = run["levels"]
         passed = [lv for lv in levels.values() if lv > 0]
@@ -151,9 +185,10 @@ def main(argv: List[str]) -> int:
             sd = math.sqrt(sum((e - mean) ** 2 for e in errors) / len(errors))
             summary = "%+.2f ± %.2f s（%d 段）" % (mean, sd, len(errors))
         print(
-            "%-14s %-8s %3d/%-3d %5s %8s  %s  %s"
+            "%-14s %-14s %-8s %3d/%-3d %5s %8s  %s  %s"
             % (
                 name,
+                build,
                 run["level"],
                 len(passed),
                 run["count"],

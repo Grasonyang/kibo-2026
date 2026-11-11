@@ -50,6 +50,7 @@ from platform_msgs.srv import StopProcessingUserNode, StopProcessingUserNodeResp
 from sensor_msgs.msg import CameraInfo, Image
 from start_watch import watch_for_start
 
+from kibo.buildstamp import STAMP_FILE, build_line, read_build_stamp
 from kibo.buslinks import missing_listeners, topic_parties
 from kibo.ctl_result import (
     ACTION_DONE,
@@ -521,6 +522,8 @@ class UserNode(object):
         self._start_sub = rospy.Subscriber("/ib2_user/start", UserLogic, self._on_start)
         self._stop_srv = rospy.Service("/ib2_user/stop", StopProcessingUserNode, self._on_stop)
         rospy.set_param("/ib2_user/ready", True)
+        here = os.path.dirname(os.path.realpath(__file__))
+        rospy.loginfo(build_line(read_build_stamp(os.path.join(here, STAMP_FILE))))
         rospy.loginfo("kibo user node ready")
         # 起跑訊號的發佈者只存在 3 秒；ROS 的通知晚了就自己去連（見 start_watch.py）
         watcher = threading.Thread(
