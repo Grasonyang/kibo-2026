@@ -61,7 +61,8 @@ class Robot(ABC):
     def notify_checkpoint(self, checkpoint_id: int, timeout_sec: float) -> bool:
         """呼叫 /event/checkpoint_passed，回傳伺服器是否接受。
 
-        最多花 timeout_sec（含等伺服器出現）；逾時回 False，而且不能再多等取消的回應。"""
+        花的時間以 timeout_sec 為限（含等伺服器出現）；逾時回 False，而且不能再多等取消的回應。
+        實作可以因為輪詢的粒度超出一點（ROS 版約 0.2 秒），呼叫端的 finish_call_sec 有留。"""
 
     @abstractmethod
     def mission_finish(self) -> bool:
@@ -129,7 +130,8 @@ class MissionConfig(NamedTuple):
     # 最多等這麼久，對應 ros/user_node.py 的 CANCEL_WAIT_SEC）。
     finish_reserve_sec: float = 3.0
     cancel_reserve_sec: float = 5.0
-    # 通知最多等 notify_timeout_sec，而且要在時限前 finish_call_sec 回來（留給完成回報的服務呼叫）。
+    # 通知最多等 notify_timeout_sec，而且要在時限前 finish_call_sec 回來：ROS 端輪詢的粒度會讓通知
+    # 超出約 0.2 秒，剩下的約 0.75 秒給完成回報的服務呼叫（平常是毫秒級）。
     # 正常一次通知不到 1 秒；卡住時（伺服器或網路出問題）不能讓它把完成回報拖過時限（issue #17）。
     notify_timeout_sec: float = 15.0
     finish_call_sec: float = 1.0

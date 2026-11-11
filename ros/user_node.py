@@ -56,6 +56,7 @@ from kibo.ctl_result import (
     ACTION_STOPPED,
     ACTION_TIMEOUT,
     MOVE_ABORTED,
+    MOVE_TIMEOUT,
     RESULT_CODES,
     mismatched_codes,
     move_outcome,
@@ -74,7 +75,7 @@ SERVICE_POLL_SEC = 0.05
 SERVICE_MAX_POLLS = int(SERVICE_TIMEOUT_SEC / SERVICE_POLL_SEC) + 2
 ACTION_SERVER_TIMEOUT_SEC = 10.0
 CANCEL_WAIT_SEC = 5.0
-MIN_WAIT_SEC = 0.05  # actionlib 的等待給 0 秒代表無限期；任何等待最少給這麼多
+MIN_WAIT_SEC = 0.05  # 等 action server 的下限：actionlib 把 0 秒當成無限期
 NAV_FRESH_SEC = 1.0  # 導航資料比這舊就當作沒有
 NAV_HISTORY_STEP_SEC = 0.05  # 導航實測約 200 Hz；紀錄降到 20 Hz 就夠判斷「到點前最後 1 秒」
 NAV_HISTORY_LEN = 64  # 20 Hz x 64 筆，約 3 秒
@@ -146,6 +147,8 @@ class RosRobot(Robot):
         if left is None:
             rospy.logerr("/ctl/command server unavailable")
             return MOVE_ABORTED
+        if left < POLL_SEC:
+            return MOVE_TIMEOUT  # 等 server 就把時間用完了：不送，免得送出又馬上取消
         goal = CtlCommandGoal(
             target=self._pose_stamped(target),
             type=CtlStatusType(type=CtlStatusType.MOVE_TO_ABSOLUTE_TARGET),
@@ -214,6 +217,8 @@ class RosRobot(Robot):
         left = self._wait_for_action_server(self._command, timeout_sec)
         if left is None:
             return MOVE_ABORTED
+        if left < POLL_SEC:
+            return MOVE_TIMEOUT
         target = PoseStamped()
         target.header.stamp = rospy.Time.now()
         target.header.frame_id = "body"

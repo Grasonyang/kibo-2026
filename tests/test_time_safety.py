@@ -368,15 +368,27 @@ def test_a_stuck_notification_cannot_delay_the_finish_report(robot_class, slowdo
     assert latest <= LIMIT - 0.5
 
 
+class RecordsNotifies(FakeRobot):
+    """記下每一次通知拿到多少秒。"""
+
+    timeouts = ()
+
+    def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
+        self.timeouts += (timeout_sec,)
+        return super().notify_checkpoint(checkpoint_id, timeout_sec)
+
+
+def _unanswered_notify(seconds_left, mission=DEFAULT_MISSION):
+    """通知永遠不回來的機器人，任務還剩 seconds_left 秒。回傳 (機器人, 任務狀態, Goal)。"""
+    message = random_checkpoints_message(3, 1)
+    robot = RecordsNotifies(message, BASE._replace(notify_sec=1000.0), 1)
+    run = _Run(robot, mission)
+    robot.t = LIMIT - seconds_left
+    return robot, run, parse_checkpoints(message).goal
+
+
 def test_a_notification_gets_no_more_time_than_is_left_before_the_finish_call():
-    class RecordsTimeout(FakeRobot):
-        timeouts = ()
-
-        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
-            self.timeouts += (timeout_sec,)
-            return super().notify_checkpoint(checkpoint_id, timeout_sec)
-
-    robot, run, goal = _run_with_seconds_left(RecordsTimeout, 100.0)
+    robot, run, goal = _run_with_seconds_left(RecordsNotifies, 100.0)
     assert run.notify(goal)
     robot.t = LIMIT - 4.0
     assert run.notify(goal)
@@ -387,55 +399,29 @@ def test_a_notification_gets_no_more_time_than_is_left_before_the_finish_call():
 
 
 def test_no_notification_is_sent_when_there_is_no_time_for_it():
-    class CountsNotifies(FakeRobot):
-        notifies = 0
-
-        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
-            self.notifies += 1
-            return super().notify_checkpoint(checkpoint_id, timeout_sec)
-
-    robot, run, goal = _run_with_seconds_left(CountsNotifies, DEFAULT_MISSION.finish_call_sec)
+    robot, run, goal = _run_with_seconds_left(RecordsNotifies, DEFAULT_MISSION.finish_call_sec)
     before = robot.t
     assert run.notify(goal) is False
-    assert robot.notifies == 0
+    assert robot.timeouts == ()
     assert robot.t == before
 
 
 def test_a_notification_that_times_out_is_retried_only_while_time_remains():
-    class NeverAnswers(FakeRobot):
-        notifies = 0
-
-        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
-            self.notifies += 1
-            return super().notify_checkpoint(checkpoint_id, timeout_sec)
-
-    slow = BASE._replace(notify_sec=1000.0)
-    robot = NeverAnswers(random_checkpoints_message(3, 1), slow, 1)
-    run = _Run(robot, DEFAULT_MISSION)
-    goal = parse_checkpoints(random_checkpoints_message(3, 1)).goal
-    robot.t = LIMIT - 6.0
+    robot, run, goal = _unanswered_notify(6.0)
     assert run.notify(goal) is False
-    assert robot.notifies == 1  # 第一次就把時間用到只剩完成回報要的，不再試第二次
+    assert len(robot.timeouts) == 1  # 第一次就把時間用到只剩完成回報要的，不再試第二次
     assert LIMIT - robot.t >= DEFAULT_MISSION.finish_call_sec
 
 
 def test_the_pause_before_a_retry_counts_against_the_time_left():
-    class NeverAnswers(FakeRobot):
-        notifies = 0
-
-        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
-            self.notifies += 1
-            return super().notify_checkpoint(checkpoint_id, timeout_sec)
-
-    message = random_checkpoints_message(3, 1)
-    robot = NeverAnswers(message, BASE._replace(notify_sec=1000.0), 1)
     quick = DEFAULT_MISSION._replace(notify_timeout_sec=2.0)
-    run = _Run(robot, quick)
-    # 第一次逾時後剩 1.3 秒：扣掉完成回報的 1 秒還有 0.3 秒，看似夠再試一次，
-    # 但重試前要先停 0.25 秒，停完就不夠了。
-    robot.t = LIMIT - 3.3
-    assert run.notify(parse_checkpoints(message).goal) is False
-    assert robot.notifies == 1
+    pause = quick.settle_interval_sec  # 重試前停這麼久
+    # 第一次逾時後，扣掉完成回報要的時間還剩「暫停再多一點點」：看似夠再試一次，
+    # 但停完就不夠了。
+    after_first = quick.finish_call_sec + pause + 0.05
+    robot, run, goal = _unanswered_notify(quick.notify_timeout_sec + after_first, quick)
+    assert run.notify(goal) is False
+    assert len(robot.timeouts) == 1
     assert LIMIT - robot.t >= quick.finish_call_sec
 
 
