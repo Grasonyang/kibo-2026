@@ -22,6 +22,7 @@ from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose, Vec3, distance, norm, quat_angle
 from kibo.judge import Judgement
 from kibo.motion import Speeds, leg_seconds
+from kibo.pace import Pace, PaceRule
 from kibo.settle import SettleRule, Steadiness
 from kibo.vision import body_correction, expected_marker_in_body
 
@@ -196,8 +197,15 @@ class _Run:
         self.speeds: Speeds = config.budget.speeds  # 會被實測往慢的方向修
         self.reserved_sec = 0.0  # 目前這一點之後還要飛多久（_fly 每一點更新）
         self.stops: List[float] = []  # 每一點實際停留的秒數（到點到回報完），見 stop_sec
-        self.predicted_sec = 0.0  # 長腿的模型預測秒數累積
-        self.actual_sec = 0.0  # 同一批腿的實際秒數累積
+        self.pace = Pace(
+            PaceRule(
+                enabled=config.calibrate_speed,
+                min_speed_ratio=config.min_speed_ratio,
+                below_ratio=config.calibrate_below_ratio,
+                min_leg_m=config.calibrate_min_leg_m,
+                min_predicted_sec=config.calibrate_min_predicted_sec,
+            )
+        )
 
     def elapsed(self) -> float:
         return self.robot.now() - self.t0
@@ -289,15 +297,10 @@ class _Run:
     def record_leg(
         self, start: Optional[Pose], target: Pose, seconds: float, timed_out: bool = False
     ) -> None:
-        """一段移動：記錄距離與秒數，必要時把規劃用的速度往慢修。
+        """一段移動：記一行距離與秒數，餵給節奏（kibo.pace），照它的結論修規劃用的速度。
 
-        逾時的腿也算證據：實際秒數至少是逾時值，所以算出來的「慢幾倍」是下界，
-        只會把速度往慢修，方向安全；沒有它，比假設慢很多的機器人會一直逾時、永遠學不到。
-
-        比的是「模型預測的秒數」對「實際秒數」。模型在本機模擬器上每段腿只差一兩秒，
-        所以這是保險：Web 模擬器或實機若整體比較慢，實測會把規劃用的秒數等比例放大。
-        慢超過死區才動，只往慢修，最多 2 倍；很短的腿不算（一兩秒的誤差佔比太大）。
-        """
+        逾時的腿也餵：實際秒數至少是逾時值，算出來的「慢幾倍」是下界，方向安全；
+        沒有它，比假設慢很多的機器人會一直逾時、永遠學不到。"""
         if start is None or seconds <= 0.0:
             return
         metres = distance(start.position, target.position)
@@ -315,21 +318,13 @@ class _Run:
                 " TIMED OUT, lower bound" if timed_out else "",
             )
         )
-        if not self.cfg.calibrate_speed or metres < self.cfg.calibrate_min_leg_m:
-            return
-        self.predicted_sec += predicted
-        self.actual_sec += seconds
-        if self.predicted_sec < self.cfg.calibrate_min_predicted_sec:
-            return  # 一兩段腿不足以下結論
-        slowdown = self.actual_sec / self.predicted_sec
-        if slowdown <= 1.0 / self.cfg.calibrate_below_ratio:
-            slowdown = 1.0  # 在死區內：用預設值（已校正過的也拉回預設，不留棘輪）
-        slowdown = min(slowdown, 1.0 / self.cfg.min_speed_ratio)
+        self.pace.add_leg(metres, predicted, seconds)
+        slowdown = self.pace.slowdown()
         calibrated = default._replace(slowdown=default.slowdown * slowdown)
         if abs(calibrated.slowdown - self.speeds.slowdown) > 1e-9:
             self.log(
                 "speed calibrated: slowdown %.2f -> %.2f (x%.2f vs model, over %.0fs of legs)"
-                % (self.speeds.slowdown, calibrated.slowdown, slowdown, self.predicted_sec)
+                % (self.speeds.slowdown, calibrated.slowdown, slowdown, self.pace.predicted_sec)
             )
             self.speeds = calibrated
 
