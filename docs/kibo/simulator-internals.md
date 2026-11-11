@@ -82,9 +82,9 @@ G2 加上 J4：保持伺服器給的姿態時，側向偏 8.8 cm 對中就掉到
   **登記的訂閱者全部連上**才送任務開始。不認節點名字，牆鐘上限 10 秒，沒有人發佈這個 topic（例如實機）就不等。
   程式在 `ros/user_node.py` 的 `_wait_for_event_listeners`，判讀規則在 `src/kibo/buslinks.py`。
 - E3 → 節點開頭設 `RES_OPTIONS=single-request`。
-- E6 → 相機修正維持關閉；每點只記一行相機與導航的比對（`MissionConfig.log_marker`）。
+- E6 → 相機修正維持關閉；每點只記一行相機與導航的比對（`MissionConfig.camera.log_marker`）。
 - E8、E9 → 這一點還有餘裕時，先等距離、對中、滾轉都在 Lv3 上限的八成以內才回報，最多多等 3 秒
-  （`MissionConfig.notify_margin`、`settle_strict_sec`）。「有沒有餘裕」看的是剩餘時間扣掉後面路線還要的秒數
+  （`MissionConfig.settle.notify_margin`、`settle.strict_sec`）。「有沒有餘裕」看的是剩餘時間扣掉後面路線還要的秒數
   （`_Run.slack`），不是剩餘時間的絕對值：到 Goal 時剩 26 秒其實很充裕。
 - E10 → 無法從我們這邊避免。`scripts/sim_report.py` 會把這種場次標成「無成績」，統計時要排除。
 

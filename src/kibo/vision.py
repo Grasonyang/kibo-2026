@@ -1,6 +1,6 @@
 """相機看 AR marker：從影像算出 marker 相對機體的位置。
 
-目前只用來記錄（每到一點比對相機與導航，`MissionConfig.log_marker`）；拿它修正位置的功能
+目前只用來記錄（每到一點比對相機與導航，`MissionConfig.camera.log_marker`）；拿它修正位置的功能
 預設關閉，因為模擬器裡換算出來的深度與導航差約 15 cm（docs/kibo/simulator-internals.md 的 E6）。
 
 原本的想法是「導航可能漂移，相機直接看 marker 比較準」。實測相反：模擬器的導航誤差只有 1 cm，

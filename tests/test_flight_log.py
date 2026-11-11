@@ -6,8 +6,13 @@ from kibo.checkpoints import parse_checkpoints
 from kibo.ctl_result import MOVE_INVALID
 from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose
-from kibo.mission import DEFAULT_MISSION, run_mission
+from kibo.mission import DEFAULT_MISSION, Probes, run_mission
 from kibo_lab.fake_robot import FakeRobot
+
+
+def probing(**flags):
+    """開了某個探針的任務設定。"""
+    return DEFAULT_MISSION._replace(probes=Probes(**flags))
 
 
 class StaleNavRobot(FakeRobot):
@@ -41,21 +46,21 @@ def test_no_notification_without_a_successful_move_even_if_judge_passes(three_po
 
 def test_probe_flag_notifies_even_when_move_failed_or_level_is_zero(three_point_message):
     robot = parked_at_first_checkpoint(three_point_message)
-    report = run_mission(robot, DEFAULT_MISSION._replace(notify_even_if_level0=True))
+    report = run_mission(robot, probing(notify_even_if_level0=True))
     assert any(v.notified for v in report.visits)
     assert any("PROBE FLAGS ON" in line for line in robot.logs)
 
 
 def test_skip_one_waypoint_probe_leaves_exactly_one_out(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT)
-    report = run_mission(robot, DEFAULT_MISSION._replace(skip_one_waypoint=True))
+    report = run_mission(robot, probing(skip_one_waypoint=True))
     assert report.goal_reached
     assert len(robot.judge.passed_ids) == 2
 
 
 def test_deliberate_late_probe_finishes_after_the_limit(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT)
-    run_mission(robot, DEFAULT_MISSION._replace(deliberate_late_after=1))
+    run_mission(robot, probing(deliberate_late_after=1))
     assert robot.judge.finished_at is not None and robot.judge.finished_at > TIME_LIMIT_SEC
 
 
@@ -85,15 +90,15 @@ def test_log_lets_you_measure_settle_seconds(three_point_message):
         if m and ("move to #1 attempt 1: success" in m.group(2) or m.group(2).startswith("at #1:")):
             left[m.group(2)[:10]] = float(m.group(1))
     settle_sec = left["move to #1"] - left["at #1: dis"]
-    assert 1.0 <= settle_sec <= DEFAULT_MISSION.settle_timeout_sec + 1.0
+    assert 1.0 <= settle_sec <= DEFAULT_MISSION.settle.timeout_sec + 1.0
 
 
 def test_probe_flags_are_off_by_default():
-    assert not DEFAULT_MISSION.probes_on
-    assert DEFAULT_MISSION.notify_even_if_level0 is False
-    assert DEFAULT_MISSION.skip_one_waypoint is False
-    assert DEFAULT_MISSION.deliberate_late_after == 0
-    assert DEFAULT_MISSION._replace(skip_one_waypoint=True).probes_on
+    assert not DEFAULT_MISSION.probes.on
+    assert DEFAULT_MISSION.probes.notify_even_if_level0 is False
+    assert DEFAULT_MISSION.probes.skip_one_waypoint is False
+    assert DEFAULT_MISSION.probes.deliberate_late_after == 0
+    assert probing(skip_one_waypoint=True).probes.on
 
 
 def test_deliberate_late_counts_notified_checkpoints_and_honours_stop(three_point_message):
@@ -104,7 +109,7 @@ def test_deliberate_late_counts_notified_checkpoints_and_honours_stop(three_poin
                 self.stop = True
 
     robot = StopDuringWait(three_point_message, PERFECT)
-    report = run_mission(robot, DEFAULT_MISSION._replace(deliberate_late_after=1))
+    report = run_mission(robot, probing(deliberate_late_after=1))
     assert report.aborted == "stop requested"
     assert robot.now() < 300.0  # 等到一半就被停下來，沒有硬睡到逾時
 

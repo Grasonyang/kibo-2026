@@ -32,7 +32,7 @@ def test_moves_that_always_fail_still_end_within_bounds(three_point_message):
     assert report.finished
     assert not report.goal_reached
     # 每個點最多 max_move_attempts 次，三個點
-    assert robot.move_calls <= 3 * DEFAULT_MISSION.max_move_attempts
+    assert robot.move_calls <= 3 * DEFAULT_MISSION.move.max_attempts
 
 
 def test_flaky_checkpoint_service_is_retried(three_point_message):

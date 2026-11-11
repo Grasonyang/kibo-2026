@@ -23,12 +23,10 @@ from kibo.geometry import Pose, Vec3, distance, norm, quat_angle
 from kibo.judge import Judgement
 from kibo.motion import Speeds, leg_seconds
 from kibo.pace import DEFAULT_PACE, Pace, PaceRule
-from kibo.settle import SettleRule, Steadiness
+from kibo.settle import SettleConfig, Steadiness
 from kibo.vision import body_correction, expected_marker_in_body
 
 ABORT_STOP = "stop requested"
-
-TOP_LEVEL = 3  # 最高的通過等級；notify_margin 的緩衝只在追求這一級時才有意義
 
 
 class Robot(ABC):
@@ -92,38 +90,10 @@ class Robot(ABC):
         print(message)
 
 
-class MissionConfig(NamedTuple):
-    time_limit_sec: float = float(TIME_LIMIT_SEC)
-    budget: BudgetConfig = DEFAULT_BUDGET
-    move_timeout_sec: float = 60.0
-    max_move_attempts: int = 2  # 總共嘗試幾次（含第一次）
-    settle_samples: int = 5  # 連續幾筆新的導航資料都達標才算穩定；5 筆、間隔 0.25 秒約涵蓋 1 秒
-    settle_interval_sec: float = 0.25
-    settle_timeout_sec: float = 6.0
-    target_level: int = 3
-    hurry_sec: float = 5.0  # 這一點的餘裕（剩餘時間扣掉後面還要飛的）少於這個，就不再追求 Lv3
-    refine_sec: float = 15.0  # 餘裕多於這個，沒穩定時才值得再移動一次去修正
-    notify_margin: float = 0.8  # 有餘裕時，先等到三個量都在 Lv3 上限的這個比例以內才回報
-    settle_strict_sec: float = 3.0  # 上面那個較嚴的標準最多等這麼久，之後照一般的 Lv3 標準
-    notify_attempts: int = 2
-    checkpoints_attempts: int = 3
-    checkpoints_retry_sec: float = 1.0
-    pose_attempts: int = 5
-    camera_fix_max_m: float = (
-        0.0  # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
-    )
-    # 速度校正的五欄（另一欄在後面）：意思與預設值都在 kibo.pace 的 PaceRule，這裡只是攤平。
-    calibrate_speed: bool = DEFAULT_PACE.enabled
-    min_speed_ratio: float = DEFAULT_PACE.min_speed_ratio
-    calibrate_below_ratio: float = DEFAULT_PACE.below_ratio
-    calibrate_min_leg_m: float = DEFAULT_PACE.min_leg_m
-    # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
-    notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
-    skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
-    deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
-    # 以下兩欄不是探針；排在後面只因為欄位順序是介面的一部分，不隨意更動。
-    calibrate_min_predicted_sec: float = DEFAULT_PACE.min_predicted_sec
-    log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
+class TimeConfig(NamedTuple):
+    """時間：時限，以及離時限多近就不能再做什麼。"""
+
+    limit_sec: float = float(TIME_LIMIT_SEC)
     # 收尾保留：完成回報晚於時限可能整場沒分，所以到點後的等待最晚只等到時限前 finish_reserve_sec
     # （之後還要回報這一點、送完成回報）；移動的逾時再早 cancel_reserve_sec（逾時後取消 action
     # 最多等這麼久，對應 ros/user_node.py 的 CANCEL_WAIT_SEC）。
@@ -134,13 +104,68 @@ class MissionConfig(NamedTuple):
     # 正常一次通知不到 1 秒；卡住時（伺服器或網路出問題）不能讓它把完成回報拖過時限（issue #17）。
     notify_timeout_sec: float = 15.0
     finish_call_sec: float = 1.0
+    # 餘裕（這一點還能多花幾秒，見 _Run.slack）的兩個門檻：
+    hurry_sec: float = 5.0  # 少於這個，就不再追求 Lv3
+    refine_sec: float = 15.0  # 多於這個，沒穩定時才值得再移動一次去修正
+
+
+class MoveConfig(NamedTuple):
+    """移動。"""
+
+    timeout_sec: float = 60.0  # 長腿會放大到估計秒數的三倍，見 _Run.move_timeout
+    max_attempts: int = 2  # 總共嘗試幾次（含第一次）
+
+
+class RetryConfig(NamedTuple):
+    """重試：各種「沒成功就再來一次」的次數上限，與兩次之間停多久。"""
+
+    notify_attempts: int = 2
+    notify_pause_sec: float = 0.25
+    checkpoints_attempts: int = 3
+    checkpoints_pause_sec: float = 1.0
+    pose_attempts: int = 5  # 讀不到導航資料時
+    pose_pause_sec: float = 0.25
+
+
+class CameraConfig(NamedTuple):
+    """相機。"""
+
+    # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
+    fix_max_m: float = 0.0
+    log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
+
+
+class Probes(NamedTuple):
+    """探針：只在資格賽的模擬器上做實驗、回答規則問題用，預設全關，決賽程式不得開啟。
+
+    決賽版可以用一句 `assert config.probes == NO_PROBES` 確認；規則問題有答案之後整組移除。"""
+
+    notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
+    skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
+    deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
 
     @property
-    def probes_on(self) -> bool:
-        """任一探針旗標開著。決賽程式必須是 False。"""
+    def on(self) -> bool:
+        """任一探針開著。"""
         return bool(
             self.notify_even_if_level0 or self.skip_one_waypoint or self.deliberate_late_after
         )
+
+
+NO_PROBES = Probes()
+
+
+class MissionConfig(NamedTuple):
+    """整場任務的設定，一組管一件事。穩定、節奏、預算那三組跟著各自的模組。"""
+
+    time: TimeConfig = TimeConfig()
+    budget: BudgetConfig = DEFAULT_BUDGET
+    move: MoveConfig = MoveConfig()
+    settle: SettleConfig = SettleConfig()
+    retry: RetryConfig = RetryConfig()
+    camera: CameraConfig = CameraConfig()
+    pace: PaceRule = DEFAULT_PACE  # 用實測的移動秒數修正時間預算（只往慢的方向）
+    probes: Probes = NO_PROBES
 
 
 DEFAULT_MISSION = MissionConfig()
@@ -195,21 +220,13 @@ class _Run:
         self.speeds: Speeds = config.budget.speeds  # 會被實測往慢的方向修
         self.reserved_sec = 0.0  # 目前這一點之後還要飛多久（_fly 每一點更新）
         self.stops: List[float] = []  # 每一點實際停留的秒數（到點到回報完），見 stop_sec
-        self.pace = Pace(
-            PaceRule(
-                enabled=config.calibrate_speed,
-                min_speed_ratio=config.min_speed_ratio,
-                below_ratio=config.calibrate_below_ratio,
-                min_leg_m=config.calibrate_min_leg_m,
-                min_predicted_sec=config.calibrate_min_predicted_sec,
-            )
-        )
+        self.pace = Pace(config.pace)
 
     def elapsed(self) -> float:
         return self.robot.now() - self.t0
 
     def remaining(self) -> float:
-        return self.cfg.time_limit_sec - self.elapsed()
+        return self.cfg.time.limit_sec - self.elapsed()
 
     def log(self, message: str) -> None:
         """前綴：機器人時鐘的絕對秒數（對結果 JSON 的事件時間用）與剩餘秒數。"""
@@ -218,19 +235,19 @@ class _Run:
     def current_pose(self) -> Optional[Pose]:
         """幾次都讀不到導航資料就回 None；呼叫端自己決定怎麼辦，不假裝知道位置。
         已經進到時限前的收尾保留就只讀一次，不等。"""
-        for _ in range(self.cfg.pose_attempts):
+        for _ in range(self.cfg.retry.pose_attempts):
             pose = self.robot.pose()
             if pose is not None:
                 self.last_pose = pose
                 return pose
-            if self.remaining() < self.cfg.finish_reserve_sec:
+            if self.remaining() < self.cfg.time.finish_reserve_sec:
                 break
-            self.robot.sleep(self.cfg.settle_interval_sec)
+            self.robot.sleep(self.cfg.retry.pose_pause_sec)
         self.log("no navigation data")
         return None
 
     def fetch_checkpoints(self) -> Optional[CheckpointSet]:
-        for attempt in range(self.cfg.checkpoints_attempts):
+        for attempt in range(self.cfg.retry.checkpoints_attempts):
             message = self.robot.get_checkpoints_message()
             if message:
                 try:
@@ -238,8 +255,8 @@ class _Run:
                 except ValueError as exc:
                     self.log("checkpoints parse failed: %s" % exc)
             self.log("get_checkpoints attempt %d failed" % (attempt + 1))
-            if attempt + 1 < self.cfg.checkpoints_attempts:
-                self.robot.sleep(self.cfg.checkpoints_retry_sec)
+            if attempt + 1 < self.cfg.retry.checkpoints_attempts:
+                self.robot.sleep(self.cfg.retry.checkpoints_pause_sec)
         return None
 
     def stop_sec(self) -> float:
@@ -265,7 +282,7 @@ class _Run:
         return self.remaining() - self.reserved_sec
 
     def required_level(self) -> int:
-        return 1 if self.slack() < self.cfg.hurry_sec else self.cfg.target_level
+        return 1 if self.slack() < self.cfg.time.hurry_sec else self.cfg.settle.target_level
 
     def move_timeout(
         self, target: Optional[Pose] = None, limit_sec: Optional[float] = None
@@ -276,7 +293,7 @@ class _Run:
 
         三倍：校正最多只認「慢 2 倍」，逾時要比那更寬，否則慢 2 倍多的機器人
         每段長腿都會被自己取消。"""
-        timeout = self.cfg.move_timeout_sec
+        timeout = self.cfg.move.timeout_sec
         if target is not None and self.last_pose is not None:
             estimate = leg_seconds(
                 self.last_pose.position,
@@ -286,7 +303,7 @@ class _Run:
                 self.speeds,
             )
             timeout = max(timeout, 3.0 * estimate)
-        reserve = self.cfg.finish_reserve_sec + self.cfg.cancel_reserve_sec
+        reserve = self.cfg.time.finish_reserve_sec + self.cfg.time.cancel_reserve_sec
         timeout = min(timeout, self.remaining() - reserve)
         if limit_sec is not None:
             timeout = min(timeout, limit_sec)
@@ -326,16 +343,6 @@ class _Run:
             )
             self.speeds = calibrated
 
-    def settle_rule(self) -> SettleRule:
-        """設定裡與穩定有關的幾欄，換成 kibo.settle 的規則。1 秒 = (筆數 - 1) x 取樣間隔。"""
-        return SettleRule(
-            samples=self.cfg.settle_samples,
-            window_sec=(self.cfg.settle_samples - 1) * self.cfg.settle_interval_sec,
-            max_age_sec=self.cfg.settle_interval_sec,
-            notify_margin=self.cfg.notify_margin,
-            top_level=TOP_LEVEL,
-        )
-
     def settle(self, cp: Checkpoint, wait: bool = True) -> Settled:
         """等到在容差內連續待滿 1 秒（stable=True），或逾時（回傳最後一次判定）。
         `wait=False` 只讀一筆不等：移動沒成功的點不會回報，等它穩定是白花時間。
@@ -344,9 +351,9 @@ class _Run:
         先看移動尾段留下的導航紀錄：夠格就不用再等。否則每 settle_interval_sec 讀一筆，
         前 settle_strict_sec 秒用較嚴的標準（離 Lv3 上限留 notify_margin 的緩衝），之後照一般標準。
         """
-        rule = self.settle_rule()
+        rule = self.cfg.settle.rule()
         watch = Steadiness(cp, rule)
-        tail = self.robot.recent_poses(rule.window_sec + self.cfg.settle_interval_sec)
+        tail = self.robot.recent_poses(rule.window_sec + self.cfg.settle.interval_sec)
         if watch.feed_tail(tail, self.robot.now(), self.required_level()):
             self.last_pose = watch.last_pose
             return Settled(watch.last, True)
@@ -356,12 +363,12 @@ class _Run:
         # 最多等 settle_timeout_sec，而且不超過這一點的餘裕（等待不能花掉後面路線要用的時間），
         # 也不越過時限前的收尾保留（到 Goal 時餘裕就是剩餘時間，不能等到見底）。
         # 沒得等的時候仍然讀一筆：那一筆不算穩定，但有判定才能決定要不要回報。
-        spare = min(self.slack(), self.remaining() - self.cfg.finish_reserve_sec)
+        spare = min(self.slack(), self.remaining() - self.cfg.time.finish_reserve_sec)
         if not wait:
             spare = 0.0
-        deadline = self.robot.now() + min(self.cfg.settle_timeout_sec, max(0.0, spare))
-        strict_until = self.robot.now() + self.cfg.settle_strict_sec
-        max_samples = int(self.cfg.settle_timeout_sec / self.cfg.settle_interval_sec) + 2
+        deadline = self.robot.now() + min(self.cfg.settle.timeout_sec, max(0.0, spare))
+        strict_until = self.robot.now() + self.cfg.settle.strict_sec
+        max_samples = int(self.cfg.settle.timeout_sec / self.cfg.settle.interval_sec) + 2
         for _ in range(max_samples):
             if self.robot.stop_requested():
                 break
@@ -372,9 +379,9 @@ class _Run:
             judgement = watch.feed(pose, self.required_level(), strict)
             if judgement is not None and watch.stable:
                 return Settled(judgement, True)
-            if self.robot.now() + self.cfg.settle_interval_sec > deadline:
+            if self.robot.now() + self.cfg.settle.interval_sec > deadline:
                 break
-            self.robot.sleep(self.cfg.settle_interval_sec)
+            self.robot.sleep(self.cfg.settle.interval_sec)
         return Settled(watch.last, False)
 
     def move(self, cp: Checkpoint, attempts: int, limit_sec: Optional[float] = None) -> bool:
@@ -408,10 +415,10 @@ class _Run:
     def notify(self, cp: Checkpoint) -> bool:
         """回報通過，最多試 notify_attempts 次；每一次都不越過「時限前 finish_call_sec」，
         沒有時間了就不送（Goal 沒回報到也沒關係：完成回報時官方會再判一次）。"""
-        for attempt in range(self.cfg.notify_attempts):
-            pause = self.cfg.settle_interval_sec if attempt else 0.0  # 重試前先停一下
-            spare = self.remaining() - pause - self.cfg.finish_call_sec
-            timeout = min(self.cfg.notify_timeout_sec, spare)
+        for attempt in range(self.cfg.retry.notify_attempts):
+            pause = self.cfg.retry.notify_pause_sec if attempt else 0.0  # 重試前先停一下
+            spare = self.remaining() - pause - self.cfg.time.finish_call_sec
+            timeout = min(self.cfg.time.notify_timeout_sec, spare)
             if timeout < MIN_NOTIFY_TIMEOUT_SEC:
                 self.log("no time left to notify #%d" % cp.id)
                 return False
@@ -441,17 +448,17 @@ class _Run:
 
     def camera_fix(self, cp: Checkpoint) -> bool:
         """用相機看到的 marker 位置修正幾公分；沒有相機、沒看到或修正量太大就回 False。"""
-        if self.cfg.camera_fix_max_m <= 0.0:
+        if self.cfg.camera.fix_max_m <= 0.0:
             return False
         observed = self.robot.marker_in_body(cp.id)
         if observed is None:
             return False
         expected = expected_marker_in_body(cp.position, target_attitude(cp), cp.marker_position)
         delta = body_correction(observed, expected)
-        if norm(delta) > self.cfg.camera_fix_max_m:
+        if norm(delta) > self.cfg.camera.fix_max_m:
             self.log("camera correction %.2fm too large, ignoring" % norm(delta))
             return False
-        timeout = self.move_timeout(limit_sec=self.slack() - self.cfg.hurry_sec)
+        timeout = self.move_timeout(limit_sec=self.slack() - self.cfg.time.hurry_sec)
         if timeout < MIN_MOVE_TIMEOUT_SEC:
             return False
         result = self.robot.move_relative(delta, timeout)
@@ -465,9 +472,9 @@ class _Run:
 
         兩者差多少，就是相機這條路（字典、marker 邊長、座標換算）可不可信的證據；
         在開啟相機修正之前，先用這行 log 累積資料。任何失敗都只記一行。"""
-        if not self.cfg.log_marker or self.last_pose is None:
+        if not self.cfg.camera.log_marker or self.last_pose is None:
             return
-        if self.remaining() < self.cfg.finish_reserve_sec:
+        if self.remaining() < self.cfg.time.finish_reserve_sec:
             return  # 影像處理沒有時間上限；快到時限就不做，完成回報優先
         try:
             observed = self.robot.marker_in_body(cp.id)
@@ -495,27 +502,30 @@ class _Run:
         )
 
     def visit(self, cp: Checkpoint) -> Visit:
-        moved = self.move(cp, self.cfg.max_move_attempts)
+        moved = self.move(cp, self.cfg.move.max_attempts)
         arrived_at = self.robot.now()
-        settled = self.settle(cp, wait=moved or self.cfg.notify_even_if_level0)
+        settled = self.settle(cp, wait=moved or self.cfg.probes.notify_even_if_level0)
         self.log(self.describe(cp, settled))
-        if not settled.stable and moved and self.slack() > self.cfg.refine_sec:
+        if not settled.stable and moved and self.slack() > self.cfg.time.refine_sec:
             # 再修正一次通常就夠了；只做一次，不無限修正。有相機就用相機，沒有就再絕對移動一次。
             # 再移動的時間上限是餘裕扣掉 hurry_sec：修正不能把後面路線要用的時間花掉。
-            if self.camera_fix(cp) or self.move(cp, 1, self.slack() - self.cfg.hurry_sec):
+            if self.camera_fix(cp) or self.move(cp, 1, self.slack() - self.cfg.time.hurry_sec):
                 settled = self.settle(cp)
                 self.log("refined: " + self.describe(cp, settled))
         # 穩定達標就回報；沒穩定但最後一次判定至少 Lv1 也回報（伺服器才是裁判，
         # 不回報一定 0 分）。沒有成功移動到點就不回報（手冊 6.5），完全沒有導航資料
         # 也不回報。探針旗標 notify_even_if_level0 可以在模擬器上覆寫這兩條。
-        should_notify = (settled.level > 0 and moved) or self.cfg.notify_even_if_level0
+        should_notify = (settled.level > 0 and moved) or self.cfg.probes.notify_even_if_level0
         notified = should_notify and self.notify(cp)
         self.log_marker(cp)  # 通知送出之後才做，不拖慢回報
         self.stops.append(self.robot.now() - arrived_at)
         notified_so_far = sum(1 for v in self.visits if v.notified) + (1 if notified else 0)
-        if self.cfg.deliberate_late_after and notified_so_far == self.cfg.deliberate_late_after:
+        if (
+            self.cfg.probes.deliberate_late_after
+            and notified_so_far == self.cfg.probes.deliberate_late_after
+        ):
             self.log("PROBE: deliberately waiting past the time limit")
-            for _ in range(int(self.cfg.time_limit_sec) + 10):  # 每秒看一次停止要求
+            for _ in range(int(self.cfg.time.limit_sec) + 10):  # 每秒看一次停止要求
                 if self.remaining() < -5.0 or self.robot.stop_requested():
                     break
                 self.robot.sleep(1.0)
@@ -561,11 +571,11 @@ def _fly(run: _Run) -> Tuple[bool, str]:
     for warning in cps.warnings:
         run.log("checkpoints warning: " + warning)
     run.log("%d checkpoints, goal #%d" % (len(cps.checkpoints), cps.goal_id))
-    if config.probes_on:
+    if config.probes.on:
         run.log("PROBE FLAGS ON: this build is for simulator experiments only")
 
     pending: List[Checkpoint] = list(cps.waypoints)
-    if config.skip_one_waypoint and pending:
+    if config.probes.skip_one_waypoint and pending:
         skipped = pending.pop(0)
         run.log("PROBE: skipping waypoint #%d on purpose" % skipped.id)
     by_id: Dict[int, Checkpoint] = {cp.id: cp for cp in cps.checkpoints}
@@ -594,7 +604,7 @@ def _fly(run: _Run) -> Tuple[bool, str]:
             0.0, plan.estimated_sec - plan.route.legs[0].seconds - run.stop_sec()
         )
         if target.id != cps.goal.id:
-            run.reserved_sec += config.finish_reserve_sec + config.cancel_reserve_sec
+            run.reserved_sec += config.time.finish_reserve_sec + config.time.cancel_reserve_sec
         record = run.visit(target)
         if target.id == cps.goal.id:
             goal_reached = record.notified

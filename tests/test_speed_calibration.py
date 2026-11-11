@@ -7,7 +7,7 @@ from kibo_lab.fake_robot import FakeRobot, FakeRobotConfig
 from kibo_lab.scenarios import random_checkpoints_message
 
 NOISY = FakeRobotConfig(position_noise_m=0.05, move_fail_prob=0.1)
-WITHOUT = DEFAULT_MISSION._replace(calibrate_speed=False)
+WITHOUT = DEFAULT_MISSION._replace(pace=DEFAULT_PACE._replace(enabled=False))
 
 
 def fleet(true_slowdown, mission, n=10, runs=6):
@@ -100,17 +100,11 @@ def test_a_timed_out_leg_counts_as_evidence_of_slowness():
     assert any("speed calibrated" in line for line in logs[first_timeout:])
 
 
-def test_every_calibration_setting_reaches_the_pace_rule(three_point_message):
-    # 規則本身在 test_pace.py 用數字測；這裡守「任務設定的每一欄都接到了節奏」。
-    odd = DEFAULT_MISSION._replace(
-        calibrate_speed=False,
-        min_speed_ratio=0.4,
-        calibrate_below_ratio=0.8,
-        calibrate_min_leg_m=0.7,
-        calibrate_min_predicted_sec=33.0,
-    )
-    run = _Run(FakeRobot(three_point_message), odd)
-    assert run.pace.rule == PaceRule(
+def test_the_pace_group_of_the_mission_settings_is_the_rule_the_run_uses(three_point_message):
+    # 規則本身在 test_pace.py 用數字測；這裡守「任務設定的那一組就是節奏用的規則」。
+    odd = PaceRule(
         enabled=False, min_speed_ratio=0.4, below_ratio=0.8, min_leg_m=0.7, min_predicted_sec=33.0
     )
+    run = _Run(FakeRobot(three_point_message), DEFAULT_MISSION._replace(pace=odd))
+    assert run.pace.rule == odd
     assert _Run(FakeRobot(three_point_message), DEFAULT_MISSION).pace.rule == DEFAULT_PACE
