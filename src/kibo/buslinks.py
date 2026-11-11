@@ -1,10 +1,10 @@
 """讀 ROS 的連線資訊：誰在發、誰訂了、誰已經真的連上。純函式，不 import rospy。
 
-兩個用途，都在起跑那一刻（ros/user_node.py）：
+兩個用途，都在起跑那一刻：
 - 送出去的：起跑前確認事件 topic 的每個訂閱者都已經連上發佈者，再送任務開始
-  （`_wait_for_event_listeners`）。
+  （`ros/user_node.py` 的 `_wait_for_event_listeners`）。
 - 收進來的：起跑訊號的發佈者只存在 3 秒，有人在發而我們還沒連上時自己去連
-  （`_watch_for_start`）。
+  （`ros/start_watch.py` 的 `watch_for_start`）。
 
 第一個用途不認節點名字：「master 登記的訂閱者全部都連上了」就算好，
 所以評分模組改名、多一個或少一個旁聽的節點都不受影響。
@@ -80,7 +80,8 @@ def loopback_uri(node_uri: Any) -> Optional[str]:
 class Unconnected(object):
     """數「有人在發、我們卻沒連上」連續看到幾次；到 `patience` 次就該自己去連。
 
-    連續才算：正常流程在發佈者出現後幾毫秒內就連上，只看到一次就動手會和它搶。"""
+    連續才算：正常流程在發佈者出現後幾毫秒內就連上，只看到一次就動手會和它搶。
+    說了「該去連」之後從頭數起：連線要一點時間才會算數，馬上再連一次只是疊上去。"""
 
     def __init__(self, patience: int) -> None:
         self.patience = patience
@@ -89,4 +90,7 @@ class Unconnected(object):
     def seen(self, published: bool, connections: int) -> bool:
         """記下這一次看到的情況；回傳現在是不是該自己去連。"""
         self.count = self.count + 1 if published and connections == 0 else 0
-        return self.count >= self.patience
+        if self.count < self.patience:
+            return False
+        self.count = 0
+        return True

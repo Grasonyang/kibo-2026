@@ -115,8 +115,9 @@ def test_being_connected_or_unpublished_starts_the_count_again():
     assert watch.seen(published=True, connections=0)
 
 
-def test_it_keeps_saying_so_while_still_unconnected():
-    # 第一次去連沒成功（對方剛好不通），下一次輪詢還要再試。
+def test_after_stepping_in_it_waits_the_same_patience_before_trying_again():
+    # 去連之後要一點時間連線才會算數；每次輪詢都再連一次只會疊出一堆並行的連線。
+    # 但一直沒連上（對方剛好不通）還是要再試。
     watch = Unconnected(patience=2)
-    looks = [watch.seen(published=True, connections=0) for _ in range(5)]
-    assert looks == [False, True, True, True, True]
+    looks = [watch.seen(published=True, connections=0) for _ in range(6)]
+    assert looks == [False, True, False, True, False, True]

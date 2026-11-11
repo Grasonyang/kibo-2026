@@ -11,10 +11,15 @@ ROS 的正常流程是 master 通知我們「有新的發佈者」，我們再�
 2. 起跑訊號有發佈者、我們的訂閱卻連續兩次都是 0 條連線：向 master 重新登記同一個訂閱
    （registerSubscriber 會回傳目前的發佈者位址；重複登記不會多一筆），
    再把位址交給自己的 publisherUpdate，和 master 通知我們時走同一條路。
-3. 收到起跑訊號、節點關閉、或超過 WATCH_SEC 就結束。
+3. 收到起跑訊號、節點關閉、超過 WATCH_SEC、或已經主動連了 MAX_CONNECTS 次就結束。
 
 連續兩次才動手，是為了不和正常流程搶：正常時發佈者出現後幾毫秒內就連上了。
-整段在 daemon thread 裡跑；XMLRPC 呼叫卡住只會讓這個保險失效，不影響正常流程。
+動手之後也要再等兩次才會再動手。整段在 daemon thread 裡跑；XMLRPC 呼叫卡住
+（rospy 給它 60 秒的逾時）只會讓這個保險失效，不影響正常流程。
+
+蓋得到的：master 的通知晚到或沒到；我們去問發佈者「怎麼連」（requestTopic）時卡住，
+下一次再試。蓋不到的：已經問到、TCP 連線卻卡住（那時連線數已經算 1，保險不會再動）。
+WATCH_SEC 之後這個保險就不在了：節點啟動後超過這麼久才起跑的場合，只剩 ROS 原本的通知。
 """
 
 import time
@@ -30,7 +35,8 @@ START_TYPE = "platform_msgs/UserLogic"
 START_NAMESPACE = "/ib2_user"
 POLL_SEC = 0.25  # 發佈者只存在 3 秒：發現、確認、連上都要在這之內
 PATIENCE = 2  # 連續這麼多次都是「有人在發、我們沒連上」才動手
-WATCH_SEC = 1800.0  # 最多看這麼久（牆鐘）；之後仍有 ROS 原本的通知
+WATCH_SEC = 3600.0  # 最多看這麼久（牆鐘）；之後仍有 ROS 原本的通知
+MAX_CONNECTS = 20  # 主動去連最多這麼多次；一直連不上就不再試
 MAX_POLLS = int(WATCH_SEC / POLL_SEC) + 2
 
 
@@ -51,6 +57,9 @@ def watch_for_start(subscriber, started):
     last_error = None
     for _ in range(MAX_POLLS):
         if started() or rospy.is_shutdown() or time.time() - began > WATCH_SEC:
+            break
+        if connects >= MAX_CONNECTS:
+            rospy.logwarn("start watch: gave up after %d connects", connects)
             break
         try:
             published = is_published(master.getPublishedTopics(START_NAMESPACE), START_TOPIC)
