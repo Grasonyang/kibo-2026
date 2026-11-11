@@ -112,6 +112,7 @@ uv run python -m kibo.tune --runs 20 --checkpoints 10           # 幾種參數�
 | 一次移動要幾秒：先平移再轉向、bang-bang、加速度依機體方向。每段腿預測誤差約 1 秒 | `motion.py` |
 | 到點精度約 1 cm、1°。瓶頸是時間：12 點全去約要 340 秒 | 模擬器記錄 |
 | 起跑太快，評分模組會漏掉任務開始，整場沒有成績 | `ros/user_node.py` 的起跑保護 |
+| 模擬器的起跑訊號只保留 3 秒，master 的通知晚到我們就收不到，整場不動 | `ros/start_watch.py`；`scripts/start-signal/` 可重現 |
 | Goal 的滾轉讀數會把小誤差放大約 7 倍 | `settle.py` 的八成緩衝 |
 
 ### 還不知道（分數在伺服器端算，要問主辦或上 Web 模擬器）
@@ -140,6 +141,8 @@ uv run python -m kibo.tune --runs 20 --checkpoints 10           # 幾種參數�
 | 保險、趕時間門檻怎麼調 | **看規則** | 保險 15 → 10 秒，veryhard 平均多 0.24 點；代價取決於逾時的規則與擾動，都還不知道 |
 
 ## 6. 還沒做的
+
+整體進度（已完成、還沒做、在等什麼）集中在 [docs/STATUS.md](../STATUS.md)；這裡只留和解法有關的。
 
 - **Web 模擬器**沒上過（需要隊伍帳號）。第一次上去要核對的事列在 [ros/README.md](../../ros/README.md)。
 - 相機只用來記錄（每點一行「相機看到的 marker 位置對導航的預期位置」），沒有拿來修正位置。
