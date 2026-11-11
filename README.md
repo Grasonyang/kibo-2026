@@ -7,20 +7,22 @@
 
 ## 先看這個
 
-零基礎入口：[docs/solution/README.md](docs/solution/README.md)（比賽在玩什麼、怎麼解、程式怎麼讀、怎麼跑）。圖在 [FigJam](https://www.figma.com/board/dcZJJmt8eCZj1jt3yjR3wz)。
+- **目前做到哪裡**：[docs/STATUS.md](docs/STATUS.md)（成績、已完成、還沒做、在等什麼、還不知道什麼）。
+- 零基礎入口：[docs/solution/README.md](docs/solution/README.md)（比賽在玩什麼、怎麼解、程式怎麼讀、怎麼跑）。
+- 圖在 [FigJam](https://www.figma.com/board/dcZJJmt8eCZj1jt3yjR3wz)。
 
 ## 結構
 
 | 路徑 | 用途 |
 |---|---|
 | `src/kibo/`、`tests/` | 不依賴 ROS 的任務邏輯、假機器人與單元測試 |
-| `ros/` | ROS 接線層 `user_node.py`，要放進官方範本才能跑 |
+| `ros/` | ROS 接線層 `user_node.py` 與起跑訊號的保險 `start_watch.py`，要放進官方範本才能跑 |
 | `docs/solution/` | 解法說明、spec、tickets、點子 |
 | `krpc_user/` | 提交給模擬器的 catkin package（官方範本，launch 改成啟動我們的節點） |
 | `docs/kibo/` | 規則摘要、API 速查、模擬器與提交流程 |
 | `docs/agents/` | agent 協作流程（planner／worker／reviewer、交付、worktree） |
 | `docs/adr/`、`GLOSSARY.md` | 決策紀錄與用語 |
-| `scripts/` | `setup-sim.sh`、`sim.sh`、`pack.sh`、`sync-labels.sh` |
+| `scripts/` | `check.sh`（推送前的驗證）、`setup-sim.sh`、`sim.sh`、`sim_report.py`、`pack.sh`、`start-signal/`（起跑訊號的重現）、`sync-labels.sh` |
 | `AGENTS.md`、`CLAUDE.md`、`.claude/`、`.codex/` | Claude Code 與 Codex 的指令與設定 |
 
 ## 開始

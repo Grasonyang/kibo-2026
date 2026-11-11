@@ -1,6 +1,6 @@
 # Tickets
 
-由 `docs/solution/spec.md` 拆出。因為還沒決定要不要 push 到 GitHub，先放這裡，不開 GitHub issue；每張做完在這裡打勾並寫 commit。
+由 `docs/solution/spec.md` 拆出的前兩個階段（T1 到 T20）。2026-11-10 起改用 GitHub Issues 追蹤，之後的工作不在這裡；整體進度見 [docs/STATUS.md](../STATUS.md)。
 
 | # | Ticket | 驗收 | 狀態 |
 |---|---|---|---|
