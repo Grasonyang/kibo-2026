@@ -62,5 +62,5 @@ My Page → SIMULATION → 上傳 `.tar.gz`，選 Simulator Level（Easy／Norma
 
 ## 尚未驗證
 
-- `scripts/pack.sh` 不呼叫官方的 `users/packing.sh`，而是跑同一個指令（`tar -zcvf <名稱>.tar.gz catkin_ws/src`）再多排除 `__pycache__`：那些 `.pyc` 是容器裡的 root 留下的，主機刪不掉。包的內容有測試（`tests/test_flight_package.py`）；還沒實際上傳過。
+- `scripts/pack.sh` 不呼叫官方的 `users/packing.sh`，而是跑同一個 `tar` 指令（官方是 `tar -zcvf <名稱>.tar.gz catkin_ws/src`）再多排除 `__pycache__`：那些 `.pyc` 是容器裡的 root 留下的，主機刪不掉。包的內容有測試（`tests/test_flight_package.py`）；還沒實際上傳過。
 - 提交包會包含 `krpc_user/scripts/kibo/`；Web 模擬器的建置流程是否與本機的 `build-user.sh` 相同，要上傳一次才知道。

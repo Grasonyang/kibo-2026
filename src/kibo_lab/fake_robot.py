@@ -7,7 +7,7 @@
 
 測試要不同的機器人時，先看 `FakeRobotConfig` 有沒有現成的欄位（到點偏移、還沒轉完的滾轉、
 移動一律失敗）；沒有才寫子類別，而且只覆寫 `Robot` 介面的方法、用 `now()` 與 `sleep()` 動時鐘，
-不直接改這裡的內部狀態。
+不直接改這裡的內部狀態（要讀真實姿態用 `truth()`，要中途換設定用 `reconfigure()`）。
 """
 
 import random
@@ -57,6 +57,7 @@ class FakeRobotConfig(NamedTuple):
     arrival_offsets_m: Tuple[Vec3, ...] = ()
     # 還沒轉完：絕對移動回報成功後的 residual_roll_sec 秒內，機體繞前方軸還差 residual_roll_deg 度，
     # 之後才到位（真的控制器在姿態進到 0.5 rad 以內就回報成功，不等轉完）。導航與假裁判都看得到。
+    # 兩欄要一起給：只給角度、秒數是 0，等於沒有。
     residual_roll_deg: float = 0.0
     residual_roll_sec: float = 0.0
     # 不是空字串的話，每次絕對移動都不動、直接回這個結果（kibo.ctl_result 的 MOVE_*）；
@@ -103,7 +104,7 @@ class FakeRobot(Robot):
         self.checkpoints: CheckpointSet = parse_checkpoints(checkpoints_message)
         self.judge = FakeJudge(self.checkpoints, config.scoring)
         self._t = 0.0  # 時鐘從 0 起算；任務一開始就呼叫 mission_start，所以也是任務時間
-        self._true_pose = config.start_pose  # 轉完之後會停在的姿態；現在真正的姿態是 _truth()
+        self._true_pose = config.start_pose  # 轉完之後會停在的姿態；現在真正的姿態是 truth()
         self._turning_until = 0.0
         self._arrivals: Dict[Vec3, int] = {}  # 目標位置 -> 成功到過幾次
         self.move_calls = 0
@@ -113,12 +114,16 @@ class FakeRobot(Robot):
         self.stop = False
         self.navlog = NavLog()  # 與真的節點同一種導航紀錄
 
-    def _truth(self) -> Pose:
-        """機器人現在真正的姿態：還沒轉完的那幾秒多一個滾轉。"""
+    def truth(self) -> Pose:
+        """機器人現在真正的姿態：還沒轉完的那幾秒多一個滾轉。假裁判看的是這個；測試可以讀。"""
         if self.cfg.residual_roll_deg and self._t < self._turning_until:
             rolled = axis_angle_quat(FORWARD, self.cfg.residual_roll_deg)
             return Pose(self._true_pose.position, quat_mul(self._true_pose.orientation, rolled))
         return self._true_pose
+
+    def reconfigure(self, **changes) -> None:
+        """任務進行到一半換設定（例如中途變慢）；給測試的子類別用。"""
+        self.cfg = self.cfg._replace(**changes)
 
     def _arrival_offset(self, target: Pose) -> Vec3:
         """這次到 target 要偏多少（世界座標），並記下又到了一次。"""
@@ -137,7 +142,7 @@ class FakeRobot(Robot):
         self._t += sec
 
     def pose(self) -> Optional[Pose]:
-        truth = self._truth()
+        truth = self.truth()
         jitter = tuple(self.rng.gauss(0, self.cfg.nav_jitter_m) for _ in range(3))
         return Pose(
             add(truth.position, (jitter[0], jitter[1], jitter[2])),
@@ -151,7 +156,7 @@ class FakeRobot(Robot):
             if self.cfg.move_always == MOVE_TIMEOUT:
                 self._t += timeout_sec
             return self.cfg.move_always
-        here = self._truth()
+        here = self.truth()
         duration = self.cfg.move_overhead_sec + leg_seconds(
             here.position, here.orientation, target.position, target.orientation, self.cfg.speeds
         )
@@ -179,7 +184,7 @@ class FakeRobot(Robot):
         steps = int(round(self.cfg.settled_before_return_sec / 0.05))
         if steps <= 0:
             return
-        truth = self._truth()
+        truth = self.truth()
         for k in range(steps, -1, -1):
             stamp = self._t - 0.05 * k
             self.navlog.add(Pose(truth.position, truth.orientation, stamp))
@@ -192,12 +197,14 @@ class FakeRobot(Robot):
         if not self.cfg.camera:
             return None
         marker = self.checkpoints.by_id(marker_id).marker_position
-        here = self._truth()
+        here = self.truth()
         seen = expected_marker_in_body(here.position, here.orientation, marker)
         return add(seen, tuple(self.rng.gauss(0, self.cfg.vision_noise_m) for _ in range(3)))  # type: ignore[arg-type]
 
     def move_relative(self, delta: Vec3, timeout_sec: float) -> str:
         self.relative_calls += 1
+        # 相對移動是從「轉完之後會停在的姿態」算的：殘餘滾轉是疊在它上面的暫時量，
+        # 拿正在轉的姿態當起點，會把那幾度永久寫進去。
         here = self._true_pose
         there = add(here.position, rotate(here.orientation, delta))
         self._t += self.cfg.move_overhead_sec + leg_seconds(
@@ -225,13 +232,13 @@ class FakeRobot(Robot):
         if self.cfg.notify_sec > timeout_sec:
             self._t += timeout_sec
             return False
-        sent_from = self._truth()
+        sent_from = self.truth()
         self._t += self.cfg.notify_sec
         self.judge.checkpoint_passed(checkpoint_id, sent_from)
         return True
 
     def mission_finish(self) -> bool:
-        self.judge.mission_finish(self._truth(), self._t)
+        self.judge.mission_finish(self.truth(), self._t)
         return True
 
     def stop_requested(self) -> bool:

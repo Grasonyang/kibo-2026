@@ -53,7 +53,7 @@ def slow_after(start_sec, slowdown, base=FakeRobot):
     class SuddenlySlow(base):
         def move_to(self, target, timeout_sec):
             if self.now() >= start_sec:
-                self.cfg = self.cfg._replace(speeds=Speeds(slowdown=slowdown))
+                self.reconfigure(speeds=Speeds(slowdown=slowdown))
             return super().move_to(target, timeout_sec)
 
     return SuddenlySlow
@@ -349,7 +349,7 @@ def notify_slows_down(after_sec, notify_sec, base=FakeRobot):
     class SlowNotify(base):
         def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
             if self.now() > after_sec:
-                self.cfg = self.cfg._replace(notify_sec=notify_sec)
+                self.reconfigure(notify_sec=notify_sec)
             return super().notify_checkpoint(checkpoint_id, timeout_sec)
 
     return SlowNotify

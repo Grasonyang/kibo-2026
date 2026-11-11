@@ -164,8 +164,7 @@ class HistoryRobot(FakeRobot):
 
     def recent_poses(self, seconds):
         self.recent_calls += 1
-        here = self.pose()
-        assert here is not None
+        here = self.truth()
         stamps = [self.now() - seconds + 0.1 * k for k in range(int(seconds / 0.1) + 1)]
         poses = [Pose(here.position, here.orientation, stamp=s) for s in stamps]
         oldest = add(here.position, self.history_offset)

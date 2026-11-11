@@ -6,7 +6,7 @@
     → 回報通過 → 下一點 …… → Goal → 完成回報
 
 所有跟機器人說話的動作都透過 `Robot` 介面。ROS 版在 `ros/user_node.py`，假的版本在
-`kibo/fake_robot.py`，所以這裡的邏輯可以在沒有模擬器的電腦上整場跑完。
+`kibo_lab/fake_robot.py`（本機實驗用，不進提交包），所以這裡的邏輯可以在沒有模擬器的電腦上整場跑完。
 
 安全原則（手冊第 5 章、6.5）：每個迴圈都有次數上限，每個等待都有時間上限，
 失敗有重試上限，收到停止要求就立刻收尾。
@@ -22,7 +22,7 @@ from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose, Vec3, distance, norm, quat_angle
 from kibo.judge import Judgement
 from kibo.motion import Speeds, leg_seconds
-from kibo.pace import Pace, PaceRule
+from kibo.pace import DEFAULT_PACE, Pace, PaceRule
 from kibo.settle import SettleRule, Steadiness
 from kibo.vision import body_correction, expected_marker_in_body
 
@@ -112,19 +112,17 @@ class MissionConfig(NamedTuple):
     camera_fix_max_m: float = (
         0.0  # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
     )
-    calibrate_speed: bool = True  # 用實測的移動秒數修正時間預算（只往慢的方向）
-    min_speed_ratio: float = 0.5  # 校正的上限：最多當作比模型慢 1/0.5 = 2 倍
-    # 死區：實測在模型的 1/0.9 = 1.11 倍以內不校正。原本是 1.25 倍；慢 20% 到 24% 落在裡面完全不修，
-    # 15 秒的保險被吃光（council sim-bringup-review 的 S1）。模型在模擬器上每段腿只差一兩秒
-    # （docs/kibo/motion-model.md 的各場實測）。
-    calibrate_below_ratio: float = 0.9
-    calibrate_min_leg_m: float = 0.5  # 只用這麼長以上的腿校正
+    # 速度校正的五欄（另一欄在後面）：意思與預設值都在 kibo.pace 的 PaceRule，這裡只是攤平。
+    calibrate_speed: bool = DEFAULT_PACE.enabled
+    min_speed_ratio: float = DEFAULT_PACE.min_speed_ratio
+    calibrate_below_ratio: float = DEFAULT_PACE.below_ratio
+    calibrate_min_leg_m: float = DEFAULT_PACE.min_leg_m
     # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
     notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
     skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
     deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
     # 以下兩欄不是探針；排在後面只因為欄位順序是介面的一部分，不隨意更動。
-    calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
+    calibrate_min_predicted_sec: float = DEFAULT_PACE.min_predicted_sec
     log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
     # 收尾保留：完成回報晚於時限可能整場沒分，所以到點後的等待最晚只等到時限前 finish_reserve_sec
     # （之後還要回報這一點、送完成回報）；移動的逾時再早 cancel_reserve_sec（逾時後取消 action

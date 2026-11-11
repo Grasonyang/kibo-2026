@@ -109,7 +109,7 @@ uv run python -m kibo_lab.tune --runs 20 --checkpoints 10           # 幾種參�
 | 事實 | 在哪 |
 |---|---|
 | 到點判定的三個算式：距離、對中（從**機體中心**量）、滾轉（對機體到 marker 的軸做 twist 分解）。自判與官方幾乎每一點都同級 | `judge.py`，測試有官方函式算出的黃金值 |
-| 每個 CheckPoint 只判第一次通知；通知回 accepted 不代表通過；完成回報時 Goal 會用當下姿態補判 | `fake_robot.py` 的假裁判照這個做 |
+| 每個 CheckPoint 只判第一次通知；通知回 accepted 不代表通過；完成回報時 Goal 會用當下姿態補判 | `src/kibo_lab/fake_judge.py`（假裁判）照這個做 |
 | CheckPoint 離 marker 固定 0.5 m、偏航 ±20°／俯仰 ±15°、滾轉 ±180°；Goal 固定是 marker 12；難度只決定點數 6／8／10／12 | `scenarios.py`、`field.py` |
 | 一次移動要幾秒：先平移再轉向、bang-bang、加速度依機體方向。每段腿預測誤差約 1 秒 | `motion.py` |
 | 到點精度約 1 cm、1°。瓶頸是時間：12 點全去約要 340 秒 | 模擬器記錄 |
