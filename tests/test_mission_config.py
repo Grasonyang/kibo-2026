@@ -1,7 +1,7 @@
 """任務設定的分組（issue #4）：每一組管一件事，沒有一欄多用；探針自己一組，節點只碰那一組。"""
 
+import ast
 import os
-import re
 
 from conftest import PERFECT
 from kibo.mission import DEFAULT_MISSION, NO_PROBES, MissionConfig, Probes, _Run
@@ -9,6 +9,7 @@ from kibo.pace import DEFAULT_PACE
 from kibo.settle import SettleConfig
 from kibo_lab.fake_robot import FakeRobot
 
+ROOT = os.path.join(os.path.dirname(__file__), "..")
 GROUPS = ("time", "budget", "move", "settle", "retry", "camera", "pace", "probes")
 
 
@@ -51,19 +52,62 @@ def test_any_single_probe_turns_the_group_on():
     assert Probes(deliberate_late_after=2).on
 
 
-def test_the_node_reads_ros_parameters_into_the_probe_group_only():
-    # ros/user_node.py 不能在這裡匯入（要 rospy），所以讀原始碼：_config 只能動 probes 這一組。
-    node = os.path.join(os.path.dirname(__file__), "..", "ros", "user_node.py")
-    with open(node, encoding="utf-8") as source:
-        text = source.read()
-    body = text[text.index("def _config():") :]
-    body = body[: body.index("\n    def ", 1)] if "\n    def " in body[1:] else body
-    assert re.findall(r"_replace\(\s*(\w+)=", body) == ["probes"]
-    assert set(re.findall(r'get_param\("~(\w+)"', body)) == {
-        "probe_notify_even_if_level0",
-        "probe_skip_one_waypoint",
-        "probe_deliberate_late_after",
-    }
+def _node_tree():
+    # ros/user_node.py 不能在這裡匯入（要 rospy），所以解析原始碼。
+    with open(os.path.join(ROOT, "ros", "user_node.py"), encoding="utf-8") as source:
+        return ast.parse(source.read())
+
+
+def _calls(tree, method):
+    """tree 裡所有 `<什麼>.method(...)` 的呼叫。"""
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == method
+    ]
+
+
+def test_the_node_changes_no_setting_other_than_the_probe_group():
+    tree = _node_tree()
+    # 整個節點只有一處改任務設定，而且只給 probes；不准用 **kwargs，也不准自己建一份 MissionConfig。
+    changed = [(kw.arg for kw in call.keywords) for call in _calls(tree, "_replace")]
+    assert [list(names) for names in changed] == [["probes"]]
+    names_used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    assert not names_used & {"MissionConfig", "TimeConfig", "MoveConfig", "RetryConfig"}
+    assert not names_used & {"CameraConfig", "SettleConfig", "PaceRule", "BudgetConfig"}
+
+
+def test_the_node_reads_probe_parameters_in_one_place_only():
+    tree = _node_tree()
+    config = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_config"
+    )
+
+    def params(scope):
+        found = []
+        for call in _calls(scope, "get_param"):
+            first = call.args[0]
+            assert isinstance(first, ast.Constant), "參數名要寫成字串常數，才看得出讀了什麼"
+            found.append(first.value)
+        return found
+
+    assert sorted(params(config)) == [
+        "~probe_deliberate_late_after",
+        "~probe_notify_even_if_level0",
+        "~probe_skip_one_waypoint",
+    ]
+    # _config 以外讀的參數都與任務設定無關
+    assert sorted(set(params(tree)) - set(params(config))) == ["/use_sim_time", "~survey_only"]
+
+
+def test_the_launch_file_we_submit_turns_no_probe_on():
+    # 節點啟動時不會自己擋探針（資格賽模擬器上要用），所以守提交包：launch 檔不得帶探針參數。
+    with open(os.path.join(ROOT, "krpc_user", "launch", "krpc_user.launch")) as source:
+        assert "probe" not in source.read()
 
 
 # ---- 沒有一欄多用：三種「等一下」各有自己的秒數 ----

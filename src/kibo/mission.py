@@ -108,6 +108,11 @@ class TimeConfig(NamedTuple):
     hurry_sec: float = 5.0  # 少於這個，就不再追求 Lv3
     refine_sec: float = 15.0  # 多於這個，沒穩定時才值得再移動一次去修正
 
+    @property
+    def move_reserve_sec(self) -> float:
+        """移動最晚要在時限前這麼久結束：逾時後還要取消、回報這一點、送完成回報。"""
+        return self.finish_reserve_sec + self.cancel_reserve_sec
+
 
 class MoveConfig(NamedTuple):
     """移動。"""
@@ -287,7 +292,7 @@ class _Run:
     def move_timeout(
         self, target: Optional[Pose] = None, limit_sec: Optional[float] = None
     ) -> float:
-        """一般是 move_timeout_sec，長腿放大到估計秒數的三倍；不超過 limit_sec，
+        """一般是 move.timeout_sec，長腿放大到估計秒數的三倍；不超過 limit_sec，
         也不越過時限前的收尾保留（逾時後還要取消、回報、送完成回報）。回傳值可能很小甚至是負的：
         代表已經沒有時間移動，由呼叫端決定不送。
 
@@ -303,8 +308,7 @@ class _Run:
                 self.speeds,
             )
             timeout = max(timeout, 3.0 * estimate)
-        reserve = self.cfg.time.finish_reserve_sec + self.cfg.time.cancel_reserve_sec
-        timeout = min(timeout, self.remaining() - reserve)
+        timeout = min(timeout, self.remaining() - self.cfg.time.move_reserve_sec)
         if limit_sec is not None:
             timeout = min(timeout, limit_sec)
         return timeout
@@ -348,8 +352,9 @@ class _Run:
         `wait=False` 只讀一筆不等：移動沒成功的點不會回報，等它穩定是白花時間。
 
         「連續待滿」怎麼算在 kibo.settle；這裡只負責拿姿態、看時鐘、決定要求幾級。
-        先看移動尾段留下的導航紀錄：夠格就不用再等。否則每 settle_interval_sec 讀一筆，
-        前 settle_strict_sec 秒用較嚴的標準（離 Lv3 上限留 notify_margin 的緩衝），之後照一般標準。
+        先看移動尾段留下的導航紀錄：夠格就不用再等。否則每 settle.interval_sec 讀一筆，
+        前 settle.strict_sec 秒用較嚴的標準（離 Lv3 上限留 settle.notify_margin 的緩衝），
+        之後照一般標準。
         """
         rule = self.cfg.settle.rule()
         watch = Steadiness(cp, rule)
@@ -360,7 +365,7 @@ class _Run:
         if watch.tail_report:
             self.log("tail of the move not usable: " + watch.tail_report)
 
-        # 最多等 settle_timeout_sec，而且不超過這一點的餘裕（等待不能花掉後面路線要用的時間），
+        # 最多等 settle.timeout_sec，而且不超過這一點的餘裕（等待不能花掉後面路線要用的時間），
         # 也不越過時限前的收尾保留（到 Goal 時餘裕就是剩餘時間，不能等到見底）。
         # 沒得等的時候仍然讀一筆：那一筆不算穩定，但有判定才能決定要不要回報。
         spare = min(self.slack(), self.remaining() - self.cfg.time.finish_reserve_sec)
@@ -413,8 +418,9 @@ class _Run:
         return False
 
     def notify(self, cp: Checkpoint) -> bool:
-        """回報通過，最多試 notify_attempts 次；每一次都不越過「時限前 finish_call_sec」，
-        沒有時間了就不送（Goal 沒回報到也沒關係：完成回報時官方會再判一次）。"""
+        """回報通過，最多試 retry.notify_attempts 次；每一次都不越過「時限前
+        time.finish_call_sec」，沒有時間了就不送。
+        Goal 沒回報到也沒關係：完成回報時官方會再判一次。"""
         for attempt in range(self.cfg.retry.notify_attempts):
             pause = self.cfg.retry.notify_pause_sec if attempt else 0.0  # 重試前先停一下
             spare = self.remaining() - pause - self.cfg.time.finish_call_sec
@@ -508,7 +514,7 @@ class _Run:
         self.log(self.describe(cp, settled))
         if not settled.stable and moved and self.slack() > self.cfg.time.refine_sec:
             # 再修正一次通常就夠了；只做一次，不無限修正。有相機就用相機，沒有就再絕對移動一次。
-            # 再移動的時間上限是餘裕扣掉 hurry_sec：修正不能把後面路線要用的時間花掉。
+            # 再移動的時間上限是餘裕扣掉 time.hurry_sec：修正不能把後面路線要用的時間花掉。
             if self.camera_fix(cp) or self.move(cp, 1, self.slack() - self.cfg.time.hurry_sec):
                 settled = self.settle(cp)
                 self.log("refined: " + self.describe(cp, settled))
@@ -604,7 +610,7 @@ def _fly(run: _Run) -> Tuple[bool, str]:
             0.0, plan.estimated_sec - plan.route.legs[0].seconds - run.stop_sec()
         )
         if target.id != cps.goal.id:
-            run.reserved_sec += config.time.finish_reserve_sec + config.time.cancel_reserve_sec
+            run.reserved_sec += config.time.move_reserve_sec
         record = run.visit(target)
         if target.id == cps.goal.id:
             goal_reached = record.notified
