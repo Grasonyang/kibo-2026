@@ -22,7 +22,7 @@ from kibo.motion import Speeds
 from kibo_lab.fake_robot import FakeRobot, fake_config
 from kibo_lab.scenarios import random_checkpoints_message
 
-LIMIT = DEFAULT_MISSION.time_limit_sec
+LIMIT = DEFAULT_MISSION.time.limit_sec
 COUNTS = (8, 10, 12)
 SEEDS = range(20)  # 正常情況的比較用全部 20 個；其他情境用前 10 個就夠
 BASE = fake_config(0.01, 0.0, 1.0)  # 到點誤差 1 cm、不失敗、與模型同速
@@ -202,17 +202,17 @@ def _run_with_seconds_left(robot_class, seconds_left, config=BASE):
 
 
 def test_no_move_is_sent_when_it_could_not_be_cancelled_before_the_limit():
-    reserve = DEFAULT_MISSION.finish_reserve_sec + DEFAULT_MISSION.cancel_reserve_sec
+    reserve = DEFAULT_MISSION.time.finish_reserve_sec + DEFAULT_MISSION.time.cancel_reserve_sec
     robot, run, goal = _run_with_seconds_left(FakeRobot, reserve + 0.5)
-    assert run.move(goal, DEFAULT_MISSION.max_move_attempts) is False
+    assert run.move(goal, DEFAULT_MISSION.move.max_attempts) is False
     assert robot.move_calls == 0
     assert robot.now() == LIMIT - (reserve + 0.5)  # 沒有花時間
 
 
 def test_a_move_timeout_leaves_room_to_cancel_and_report():
-    reserve = DEFAULT_MISSION.finish_reserve_sec + DEFAULT_MISSION.cancel_reserve_sec
+    reserve = DEFAULT_MISSION.time.finish_reserve_sec + DEFAULT_MISSION.time.cancel_reserve_sec
     robot, run, goal = _run_with_seconds_left(FakeRobot, 100.0)
-    assert run.move_timeout() == pytest.approx(DEFAULT_MISSION.move_timeout_sec)
+    assert run.move_timeout() == pytest.approx(DEFAULT_MISSION.move.timeout_sec)
     _wait_until_left(robot, 20.0)
     assert run.move_timeout() == pytest.approx(20.0 - reserve)
 
@@ -222,7 +222,7 @@ def test_waiting_at_the_goal_stops_before_the_limit():
     robot, run, goal = _run_with_seconds_left(NeverSteady, 5.0)
     settled = run.settle(goal)
     assert not settled.stable
-    assert LIMIT - robot.now() >= DEFAULT_MISSION.finish_reserve_sec
+    assert LIMIT - robot.now() >= DEFAULT_MISSION.time.finish_reserve_sec
 
 
 def test_a_point_the_move_did_not_reach_is_not_waited_on():
@@ -232,7 +232,7 @@ def test_a_point_the_move_did_not_reach_is_not_waited_on():
     before = robot.now()
     record = run.visit(goal)
     assert not record.moved and not record.notified
-    assert robot.move_calls == DEFAULT_MISSION.max_move_attempts
+    assert robot.move_calls == DEFAULT_MISSION.move.max_attempts
     assert robot.now() == before
 
 
@@ -256,18 +256,20 @@ def test_the_camera_correction_is_limited_by_slack_too():
             return MOVE_SUCCESS
 
     robot, run, goal = _run_with_seconds_left(SeesMarkerSlightlyOff, 100.0)
-    run.cfg = DEFAULT_MISSION._replace(camera_fix_max_m=0.1)
+    run.cfg = DEFAULT_MISSION._replace(camera=DEFAULT_MISSION.camera._replace(fix_max_m=0.1))
     expected = mission_module.expected_marker_in_body(
         goal.position, target_attitude(goal), goal.marker_position
     )
     robot.seen = add(expected, (0.0, 0.02, 0.0))
     run.reserved_sec = 80.0  # 餘裕 20 秒
     assert run.camera_fix(goal)
-    assert robot.relative_timeouts == (pytest.approx(20.0 - DEFAULT_MISSION.hurry_sec),)
+    assert robot.relative_timeouts == (pytest.approx(20.0 - DEFAULT_MISSION.time.hurry_sec),)
 
 
 def test_reading_the_pose_does_not_retry_inside_the_finish_reserve():
-    robot, run, _ = _run_with_seconds_left(NoNavigation, DEFAULT_MISSION.finish_reserve_sec - 0.5)
+    robot, run, _ = _run_with_seconds_left(
+        NoNavigation, DEFAULT_MISSION.time.finish_reserve_sec - 0.5
+    )
     before = robot.now()
     assert run.current_pose() is None
     assert robot.now() == before
@@ -279,7 +281,7 @@ def test_the_cancel_reserve_covers_how_long_the_node_waits_for_a_cancel():
     with open(node) as source:
         found = re.search(r"^CANCEL_WAIT_SEC = ([0-9.]+)", source.read(), re.MULTILINE)
     assert found
-    assert DEFAULT_MISSION.cancel_reserve_sec >= float(found.group(1))
+    assert DEFAULT_MISSION.time.cancel_reserve_sec >= float(found.group(1))
 
 
 def test_the_short_move_that_refines_a_point_is_not_calibration_evidence():
@@ -394,13 +396,13 @@ def test_a_notification_gets_no_more_time_than_is_left_before_the_finish_call():
     _wait_until_left(robot, 4.0)
     assert run.notify(goal)
     assert robot.timeouts == (
-        pytest.approx(DEFAULT_MISSION.notify_timeout_sec),
-        pytest.approx(4.0 - DEFAULT_MISSION.finish_call_sec),
+        pytest.approx(DEFAULT_MISSION.time.notify_timeout_sec),
+        pytest.approx(4.0 - DEFAULT_MISSION.time.finish_call_sec),
     )
 
 
 def test_no_notification_is_sent_when_there_is_no_time_for_it():
-    robot, run, goal = _run_with_seconds_left(RecordsNotifies, DEFAULT_MISSION.finish_call_sec)
+    robot, run, goal = _run_with_seconds_left(RecordsNotifies, DEFAULT_MISSION.time.finish_call_sec)
     before = robot.now()
     assert run.notify(goal) is False
     assert robot.timeouts == ()
@@ -411,19 +413,19 @@ def test_a_notification_that_times_out_is_retried_only_while_time_remains():
     robot, run, goal = _unanswered_notify(6.0)
     assert run.notify(goal) is False
     assert len(robot.timeouts) == 1  # 第一次就把時間用到只剩完成回報要的，不再試第二次
-    assert LIMIT - robot.now() >= DEFAULT_MISSION.finish_call_sec
+    assert LIMIT - robot.now() >= DEFAULT_MISSION.time.finish_call_sec
 
 
 def test_the_pause_before_a_retry_counts_against_the_time_left():
-    quick = DEFAULT_MISSION._replace(notify_timeout_sec=2.0)
-    pause = quick.settle_interval_sec  # 重試前停這麼久
+    quick = DEFAULT_MISSION._replace(time=DEFAULT_MISSION.time._replace(notify_timeout_sec=2.0))
+    pause = quick.retry.notify_pause_sec  # 重試前停這麼久
     # 第一次逾時後，扣掉完成回報要的時間還剩「暫停再多一點點」：看似夠再試一次，
     # 但停完就不夠了。
-    after_first = quick.finish_call_sec + pause + 0.05
-    robot, run, goal = _unanswered_notify(quick.notify_timeout_sec + after_first, quick)
+    after_first = quick.time.finish_call_sec + pause + 0.05
+    robot, run, goal = _unanswered_notify(quick.time.notify_timeout_sec + after_first, quick)
     assert run.notify(goal) is False
     assert len(robot.timeouts) == 1
-    assert LIMIT - robot.now() >= quick.finish_call_sec
+    assert LIMIT - robot.now() >= quick.time.finish_call_sec
 
 
 def test_the_fake_judge_never_sees_a_notification_that_timed_out(three_point_message):
@@ -447,6 +449,6 @@ def test_the_marker_log_is_skipped_inside_the_finish_reserve():
     run.last_pose = Pose(goal.position, target_attitude(goal))
     run.log_marker(goal)
     assert robot.looks == 1
-    _wait_until_left(robot, DEFAULT_MISSION.finish_reserve_sec - 0.5)
+    _wait_until_left(robot, DEFAULT_MISSION.time.finish_reserve_sec - 0.5)
     run.log_marker(goal)
     assert robot.looks == 1  # 進了收尾保留就不再看

@@ -53,20 +53,20 @@ Web 模擬器只回結果 JSON 與我們的 log（手冊 4.3.2），**log 寫了
 
 ### 第 2 場：正常跑一場（校準）
 
-設定：速度校正開（預設；速度猜對時零影響，起停時間被算進去反而讓預算誠實）、**相機修正關**（預設 `camera_fix_max_m=0`；ROS 端座標未驗證，開著會把每個不穩的點多一次移動，混淆 log）、探針全關。
+設定：速度校正開（預設；速度猜對時零影響，起停時間被算進去反而讓預算誠實）、**相機修正關**（預設 `camera.fix_max_m=0`；ROS 端座標未驗證，開著會把每個不穩的點多一次移動，混淆 log）、探針全關。
 逐項核對 log 與結果 JSON：
 - 每段 `leg: Xm in Ys (model Zs)`：實際比模型慢超過 25% 會自動校正；慢超過 2 倍就要改 `Speeds` 預設值。
 - `at #n: ... -> Lv? nav_age=`：我們的 Lv 對 JSON `checkpoint_detail.level`。本機模擬器幾乎每點同級；Web 模擬器若恆較低，代表那邊的導航或擾動不同，先看 `marker #n seen` 那一行相機與導航差多少。
 - `duration_sec` 對 log 的 elapsed：差 > 3 s → t0 要往前推或 `margin_sec` 加大。
 - `goal.reason`、`Time Bonus`、各 Lv 的分數：校正 `scoring.py` 的常數。
-- 有沒有被「長時間不動」提前結束（規則書 4.2.5）：有的話 `settle_timeout_sec` 要縮。
+- 有沒有被「長時間不動」提前結束（規則書 4.2.5）：有的話 `settle.timeout_sec` 要縮。
 
 ### 第 3、4 場：只在刪點會觸發、而且第 0 場與 POC 都沒給答案時才做的探針
 
-第 2 場若從沒出現 `dropping`，或第 0 場的 `goal.reason` 已經說明了 Goal 規則，這兩場可以省。探針旗標預設關，用 ROS 私有參數開（`_probe_skip_one_waypoint:=true`、`_probe_deliberate_late_after:=2`、`_probe_notify_even_if_level0:=true`），log 會印 `PROBE FLAGS ON`；**決賽程式不得開啟**（規則書 4.2.4 只能跑一次），提交前確認 launch 檔沒有帶這些參數。
-- `skip_one_waypoint=True`：看 `goal.success` 與 Goal Score → 定 A（需全點）或 B（只需 Goal 點）。
-- `deliberate_late_after=2`：看已過的點分數是否保留、Time Bonus 多少 → 定 T0 或 T1。
-- `notify_even_if_level0=True`：自判 0 分也回報，拿伺服器判定校準 `judge`。
+第 2 場若從沒出現 `dropping`，或第 0 場的 `goal.reason` 已經說明了 Goal 規則，這兩場可以省。探針旗標預設關，用 ROS 私有參數開（`_probe_skip_one_waypoint:=true`、`_probe_deliberate_late_after:=2`、`_probe_notify_even_if_level0:=true`），log 會印 `PROBE FLAGS ON`；**決賽程式不得開啟**（規則書 4.2.4 只能跑一次），提交前確認 launch 檔沒有帶這些參數（repo 裡的 launch 檔有測試守著：`tests/test_mission_config.py`）。節點自己不會擋：三個參數都沒給時設定的 `probes` 就是 `NO_PROBES`，但沒有任何地方斷言它；決賽版要把讀參數的那幾行拿掉，換成 `assert config.probes == NO_PROBES`。
+- `_probe_skip_one_waypoint:=true`（設定的 `probes.skip_one_waypoint`）：看 `goal.success` 與 Goal Score → 定 A（需全點）或 B（只需 Goal 點）。
+- `_probe_deliberate_late_after:=2`（`probes.deliberate_late_after`）：看已過的點分數是否保留、Time Bonus 多少 → 定 T0 或 T1。
+- `_probe_notify_even_if_level0:=true`（`probes.notify_even_if_level0`）：自判 0 分也回報，拿伺服器判定校準 `judge`。
 定了世界就把 `kibo_lab.tune` 對應那一欄當主要依據。
 
 ### 其他要核對的

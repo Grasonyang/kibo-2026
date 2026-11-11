@@ -10,9 +10,23 @@ from kibo.geometry import Pose, add
 from kibo.mission import DEFAULT_MISSION, run_mission
 from kibo_lab.fake_robot import CAMERA_FIX_MAX_M, FakeRobot
 
-CAMERA_ON = DEFAULT_MISSION._replace(camera_fix_max_m=CAMERA_FIX_MAX_M)
+CAMERA_ON = DEFAULT_MISSION._replace(
+    camera=DEFAULT_MISSION.camera._replace(fix_max_m=CAMERA_FIX_MAX_M)
+)
 SIDEWAYS_15CM = (0.0, 0.15, 0.0)  # 機體 +Y，與視線垂直：位置 Lv2、對中約 17° 也是 Lv2
 LOST_35CM = (0.0, 0.0, 0.35)  # 超出最寬的位置餘裕
+
+
+def _just_enough_time(limit_sec):
+    """時限只有 limit_sec、不留保險的任務設定。"""
+    return DEFAULT_MISSION._replace(
+        time=DEFAULT_MISSION.time._replace(
+            limit_sec=limit_sec,
+            finish_reserve_sec=0.0,  # 這裡只看餘裕的規則；收尾保留另外在 test_time_safety.py 測
+            cancel_reserve_sec=0.0,
+        ),
+        budget=DEFAULT_MISSION.budget._replace(margin_sec=0.0),
+    )
 
 
 class BlindRobot(FakeRobot):
@@ -70,12 +84,7 @@ def test_outside_every_margin_is_not_reported(three_point_message):
 def test_when_there_is_no_time_to_spare_a_lower_level_counts_as_stable(three_point_message):
     # 時間剛好夠飛完：每一點都偏 15 cm（Lv2），沒有餘裕等或修正，直接以 Lv2 回報。
     dry_run = run_mission(FakeRobot(three_point_message, PERFECT), DEFAULT_MISSION)
-    tight = DEFAULT_MISSION._replace(
-        time_limit_sec=dry_run.elapsed_sec + 2.0,
-        budget=DEFAULT_MISSION.budget._replace(margin_sec=0.0),
-        finish_reserve_sec=0.0,  # 這裡只看餘裕的規則；收尾保留另外在 test_time_safety.py 測
-        cancel_reserve_sec=0.0,
-    )
+    tight = _just_enough_time(dry_run.elapsed_sec + 2.0)
     robot = FakeRobot(three_point_message, OFFSET)
     report = run_mission(robot, tight)
     assert report.visits[0].stable  # 不趕時間時 Lv2 不算穩定（上一個測試），沒餘裕時就算
@@ -94,7 +103,7 @@ def test_one_refinement_move_recovers_level_3(three_point_message):
 def test_rejected_notifications_are_retried_a_bounded_number_of_times(three_point_message):
     robot = RejectingRobot(three_point_message, PERFECT)
     report = run_mission(robot, DEFAULT_MISSION)
-    assert robot.notify_calls == 3 * DEFAULT_MISSION.notify_attempts
+    assert robot.notify_calls == 3 * DEFAULT_MISSION.retry.notify_attempts
     assert not report.goal_reached
 
 
@@ -107,7 +116,7 @@ def test_invalid_move_is_not_retried(three_point_message):
 def test_timed_out_move_is_retried_up_to_the_limit(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT._replace(move_always=MOVE_TIMEOUT))
     report = run_mission(robot, DEFAULT_MISSION)
-    assert robot.move_calls <= 3 * DEFAULT_MISSION.max_move_attempts
+    assert robot.move_calls <= 3 * DEFAULT_MISSION.move.max_attempts
     assert report.finished
 
 
@@ -142,7 +151,7 @@ def test_large_but_allowed_drift_is_still_corrected_by_camera(three_point_messag
 
 
 def test_implausible_camera_correction_falls_back_to_absolute_move(three_point_message):
-    # 超過 camera_fix_max_m，應該不信相機、改用絕對移動
+    # 超過相機修正量的上限，應該不信相機、改用絕對移動
     huge = DRIFTING_WITH_CAMERA._replace(arrival_offsets_m=((0.0, 0.0, 0.5),))
     robot = FakeRobot(three_point_message, huge)
     run_mission(robot, CAMERA_ON)
@@ -232,29 +241,26 @@ def test_with_time_to_spare_at_the_goal_it_waits_for_level_3():
     # 就回報，官方只給 Lv1。到 Goal 之後已經沒有別的事要做，剩下的時間都可以拿來等。
     message = _realistic_message()
     dry_run = run_mission(FakeRobot(message, PERFECT), DEFAULT_MISSION)
-    roomy = DEFAULT_MISSION._replace(time_limit_sec=dry_run.elapsed_sec + 30.0)
+    roomy = DEFAULT_MISSION._replace(
+        time=DEFAULT_MISSION.time._replace(limit_sec=dry_run.elapsed_sec + 30.0)
+    )
     robot = FakeRobot(message, STILL_TURNING)
     report = run_mission(robot, roomy)
     assert report.visits[-1].checkpoint_id == 12
     assert [v.judged_level for v in report.visits] == [3, 3, 3]
     assert robot.judge.passed_levels == [3, 3, 3]
-    assert report.elapsed_sec <= roomy.time_limit_sec
+    assert report.elapsed_sec <= roomy.time.limit_sec
 
 
 def test_when_the_rest_of_the_route_needs_the_time_it_settles_for_less():
     # 時間只夠剛好飛完：每一點都沒有多餘的秒數可以等，還在轉（Lv2）就回報。
     message = _realistic_message()
     dry_run = run_mission(FakeRobot(message, PERFECT), DEFAULT_MISSION)
-    tight = DEFAULT_MISSION._replace(
-        time_limit_sec=dry_run.elapsed_sec + 2.0,
-        budget=DEFAULT_MISSION.budget._replace(margin_sec=0.0),
-        finish_reserve_sec=0.0,  # 這裡只看餘裕的規則；收尾保留另外在 test_time_safety.py 測
-        cancel_reserve_sec=0.0,
-    )
+    tight = _just_enough_time(dry_run.elapsed_sec + 2.0)
     robot = FakeRobot(message, STILL_TURNING)
     report = run_mission(robot, tight)
     assert [v.judged_level for v in report.visits] == [2, 2, 2]
-    assert report.elapsed_sec <= tight.time_limit_sec
+    assert report.elapsed_sec <= tight.time.limit_sec
 
 
 def test_with_time_to_spare_it_does_not_report_right_at_the_edge_of_level_3():
@@ -282,7 +288,9 @@ def test_the_level_3_buffer_does_not_apply_when_only_level_2_is_wanted():
     # 只求 Lv2 的設定：停在 15°（Lv2）就該馬上算穩定，不該被「Lv3 上限的八成」擋住再等 3 秒。
     message = _realistic_message()
     robot = FakeRobot(message, STILL_TURNING._replace(residual_roll_sec=FOR_EVER))
-    report = run_mission(robot, DEFAULT_MISSION._replace(target_level=2))
+    report = run_mission(
+        robot, DEFAULT_MISSION._replace(settle=DEFAULT_MISSION.settle._replace(target_level=2))
+    )
     assert [v.judged_level for v in report.visits] == [2, 2, 2]
     assert all(v.stable for v in report.visits)
     assert _seconds_between_arrival_and_report(robot, 12) < 2.0

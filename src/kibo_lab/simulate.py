@@ -45,7 +45,9 @@ def main(argv: List[str]) -> int:
     scores = []
     for i in range(args.runs):
         mission_cfg = DEFAULT_MISSION._replace(
-            camera_fix_max_m=CAMERA_FIX_MAX_M if args.camera else 0.0
+            camera=DEFAULT_MISSION.camera._replace(
+                fix_max_m=CAMERA_FIX_MAX_M if args.camera else 0.0
+            )
         )
         robot, report = run_once(args.seed + i, args.checkpoints, robot_cfg, mission_cfg)
         score = robot.judge.score()

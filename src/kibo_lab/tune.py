@@ -27,13 +27,13 @@ def variants() -> List[Variant]:
     budget = base.budget
     return [
         Variant("預設（保險 15s，穩定 1s）", base),
-        Variant("不校正速度", base._replace(calibrate_speed=False)),
+        Variant("不校正速度", base._replace(pace=base.pace._replace(enabled=False))),
         Variant("保險 5s", base._replace(budget=budget._replace(margin_sec=5.0))),
         Variant("保險 30s", base._replace(budget=budget._replace(margin_sec=30.0))),
         Variant("穩定估 0s", base._replace(budget=budget._replace(settle_sec=0.0))),
         Variant("穩定估 4s", base._replace(budget=budget._replace(settle_sec=4.0))),
-        Variant("只求 Lv2", base._replace(target_level=2)),
-        Variant("趕時間門檻 15s", base._replace(hurry_sec=15.0)),
+        Variant("只求 Lv2", base._replace(settle=base.settle._replace(target_level=2))),
+        Variant("趕時間門檻 15s", base._replace(time=base.time._replace(hurry_sec=15.0))),
         Variant("不刪點（只做對照）", base._replace(budget=budget._replace(allow_drop=False))),
     ]
 
@@ -105,7 +105,9 @@ def main(argv: List[str]) -> int:
             evaluate(
                 v._replace(
                     config=v.config._replace(
-                        camera_fix_max_m=CAMERA_FIX_MAX_M if cfg.camera else 0.0
+                        camera=v.config.camera._replace(
+                            fix_max_m=CAMERA_FIX_MAX_M if cfg.camera else 0.0
+                        )
                     )
                 ),
                 args.runs,

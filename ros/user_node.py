@@ -64,6 +64,7 @@ from kibo.ctl_result import (
 from kibo.geometry import Pose
 from kibo.mission import (
     DEFAULT_MISSION,
+    Probes,
     Robot,
     run_mission,
 )
@@ -554,12 +555,13 @@ class UserNode(object):
     @staticmethod
     def _config():
         """比賽用 DEFAULT_MISSION。探針只在資格賽模擬器上用，用 ROS 參數開，跑完就不要再帶。"""
-        config = DEFAULT_MISSION._replace(
+        probes = Probes(
             notify_even_if_level0=bool(rospy.get_param("~probe_notify_even_if_level0", False)),
             skip_one_waypoint=bool(rospy.get_param("~probe_skip_one_waypoint", False)),
             deliberate_late_after=int(rospy.get_param("~probe_deliberate_late_after", 0)),
         )
-        if config.probes_on:
+        config = DEFAULT_MISSION._replace(probes=probes)
+        if probes.on:
             rospy.logwarn("PROBE FLAGS ON via ROS params; never submit this to the final round")
         return config
 

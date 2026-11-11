@@ -35,6 +35,30 @@ class SettleRule(NamedTuple):
     top_level: int  # 最高的通過等級；notify_margin 只在要求這一級時才有意義
 
 
+TOP_LEVEL = 3  # 最高的通過等級
+
+
+class SettleConfig(NamedTuple):
+    """任務設定裡「穩定」那一組：到點之後要求幾級、怎麼取樣、最多等多久。"""
+
+    target_level: int = TOP_LEVEL  # 有餘裕時追求的等級
+    samples: int = 5  # 連續幾筆新的導航資料都達標才算穩定；5 筆、間隔 0.25 秒約涵蓋 1 秒
+    interval_sec: float = 0.25  # 兩筆取樣之間等多久
+    timeout_sec: float = 6.0  # 一直不穩時最多等多久
+    notify_margin: float = 0.8  # 有餘裕時，先等到三個量都在 Lv3 上限的這個比例以內才回報
+    strict_sec: float = 3.0  # 上面那個較嚴的標準最多等這麼久，之後照一般的 Lv3 標準
+
+    def rule(self) -> SettleRule:
+        """換成 Steadiness 要的規則。1 秒 = (筆數 - 1) x 取樣間隔。"""
+        return SettleRule(
+            samples=self.samples,
+            window_sec=(self.samples - 1) * self.interval_sec,
+            max_age_sec=self.interval_sec,
+            notify_margin=self.notify_margin,
+            top_level=TOP_LEVEL,
+        )
+
+
 class Steadiness(object):
     """一個 CheckPoint 上的連續達標紀錄。每到一個點建一個新的。"""
 
