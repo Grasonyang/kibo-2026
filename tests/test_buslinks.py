@@ -3,7 +3,13 @@
 資料形狀照 ROS master 的 getSystemState 與節點的 getBusInfo（都是清單的清單）。
 """
 
-from kibo.buslinks import missing_listeners, topic_parties
+from kibo.buslinks import (
+    Unconnected,
+    is_published,
+    loopback_uri,
+    missing_listeners,
+    topic_parties,
+)
 
 TOPIC = "/gs/data"
 API = "/krpc_api_node"
@@ -64,3 +70,53 @@ def test_garbage_is_read_as_nothing_known():
     assert topic_parties([["oops"], 3], TOPIC) == ([], [])
     assert missing_listeners(None, TOPIC, [JUDGE]) == [JUDGE]
     assert missing_listeners([None, "x", [1, 2]], TOPIC, [JUDGE]) == [JUDGE]
+
+
+# ---- 起跑訊號：有人在發而我們還沒連上時，自己去連（ros/user_node.py 的 _watch_for_start）----
+
+
+def test_a_topic_is_published_when_the_master_lists_it():
+    # getPublishedTopics：[[topic, type], …]，只列至少有一個發佈者的 topic
+    listed = [["/ib2_user/start", "platform_msgs/UserLogic"], ["/rosout", "rosgraph_msgs/Log"]]
+    assert is_published(listed, "/ib2_user/start")
+    assert not is_published(listed, "/ib2_user/stop")
+
+
+def test_an_unreadable_topic_list_counts_as_not_published():
+    for garbage in (None, "nope", 3, [None, "x", ["only-one-field"], []]):
+        assert not is_published(garbage, "/ib2_user/start")
+
+
+def test_the_node_reaches_its_own_api_without_a_name_lookup():
+    # 節點向 master 登記的位址用主機名稱；呼叫自己走 127.0.0.1 同一個埠，不經過 DNS。
+    assert loopback_uri("http://krpc-user:40805/") == "http://127.0.0.1:40805/"
+    assert loopback_uri("http://10.0.0.7:5123") == "http://127.0.0.1:5123/"
+
+
+def test_an_address_without_a_usable_port_gives_none():
+    for bad in (None, "", "krpc-user", "http://krpc-user/", "http://krpc-user:abc/", "http://h:0/"):
+        assert loopback_uri(bad) is None
+
+
+def test_one_unconnected_look_is_not_enough_to_step_in():
+    # 正常流程在發佈者出現後幾毫秒內就連上；只看到一次「還沒連上」就動手會和它搶。
+    watch = Unconnected(patience=2)
+    assert not watch.seen(published=True, connections=0)
+    assert watch.seen(published=True, connections=0)
+
+
+def test_being_connected_or_unpublished_starts_the_count_again():
+    watch = Unconnected(patience=2)
+    assert not watch.seen(published=True, connections=0)
+    assert not watch.seen(published=True, connections=1)
+    assert not watch.seen(published=True, connections=0)
+    assert not watch.seen(published=False, connections=0)
+    assert not watch.seen(published=True, connections=0)
+    assert watch.seen(published=True, connections=0)
+
+
+def test_it_keeps_saying_so_while_still_unconnected():
+    # 第一次去連沒成功（對方剛好不通），下一次輪詢還要再試。
+    watch = Unconnected(patience=2)
+    looks = [watch.seen(published=True, connections=0) for _ in range(5)]
+    assert looks == [False, True, True, True, True]
