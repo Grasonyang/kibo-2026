@@ -16,11 +16,11 @@ import pytest
 from kibo import mission as mission_module
 from kibo.checkpoints import parse_checkpoints, target_attitude
 from kibo.ctl_result import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT
-from kibo.fake_robot import FakeRobot, fake_config
 from kibo.geometry import Pose, add
 from kibo.mission import DEFAULT_MISSION, _Run, run_mission
 from kibo.motion import Speeds
-from kibo.scenarios import random_checkpoints_message
+from kibo_lab.fake_robot import FakeRobot, fake_config
+from kibo_lab.scenarios import random_checkpoints_message
 
 LIMIT = DEFAULT_MISSION.time_limit_sec
 COUNTS = (8, 10, 12)
@@ -52,8 +52,8 @@ def slow_after(start_sec, slowdown, base=FakeRobot):
 
     class SuddenlySlow(base):
         def move_to(self, target, timeout_sec):
-            if self.t >= start_sec:
-                self.cfg = self.cfg._replace(speeds=Speeds(slowdown=slowdown))
+            if self.now() >= start_sec:
+                self.reconfigure(speeds=Speeds(slowdown=slowdown))
             return super().move_to(target, timeout_sec)
 
     return SuddenlySlow
@@ -66,7 +66,7 @@ def slow_to_cancel(base=FakeRobot, cancel_sec=5.2):
         def move_to(self, target, timeout_sec):
             result = super().move_to(target, timeout_sec)
             if result == MOVE_TIMEOUT:
-                self.t += cancel_sec
+                self.sleep(cancel_sec)
             return result
 
     return SlowToCancel
@@ -123,10 +123,10 @@ def fleet(robot_class, slowdown, seeds=range(10), move_fail_prob=0.0):
         for seed in seeds:
             robot = robot_class(random_checkpoints_message(count, seed), config, seed)
             run_mission(robot, DEFAULT_MISSION)
-            assert robot.finished_at is not None
-            latest = max(latest, robot.finished_at)
-            goals += robot.goal_reached
-            passed += len(robot.passed_ids)
+            assert robot.judge.finished_at is not None
+            latest = max(latest, robot.judge.finished_at)
+            goals += robot.judge.goal_reached
+            passed += len(robot.judge.passed_ids)
         mean_points[count] = passed / float(len(seeds))
     return latest, goals, mean_points
 
@@ -188,11 +188,16 @@ def test_the_finish_report_is_on_time_even_when_the_plan_is_wrong(
     assert latest <= LIMIT - 1.0
 
 
-def _run_with_seconds_left(robot_class, seconds_left):
+def _wait_until_left(robot, seconds_left):
+    """把假機器人的時鐘往前撥到任務還剩 seconds_left 秒。"""
+    robot.sleep(LIMIT - seconds_left - robot.now())
+
+
+def _run_with_seconds_left(robot_class, seconds_left, config=BASE):
     message = random_checkpoints_message(3, 1)
-    robot = robot_class(message, BASE, 1)
+    robot = robot_class(message, config, 1)
     run = _Run(robot, DEFAULT_MISSION)
-    robot.t = LIMIT - seconds_left
+    _wait_until_left(robot, seconds_left)
     return robot, run, parse_checkpoints(message).goal
 
 
@@ -201,14 +206,14 @@ def test_no_move_is_sent_when_it_could_not_be_cancelled_before_the_limit():
     robot, run, goal = _run_with_seconds_left(FakeRobot, reserve + 0.5)
     assert run.move(goal, DEFAULT_MISSION.max_move_attempts) is False
     assert robot.move_calls == 0
-    assert robot.t == LIMIT - (reserve + 0.5)  # 沒有花時間
+    assert robot.now() == LIMIT - (reserve + 0.5)  # 沒有花時間
 
 
 def test_a_move_timeout_leaves_room_to_cancel_and_report():
     reserve = DEFAULT_MISSION.finish_reserve_sec + DEFAULT_MISSION.cancel_reserve_sec
     robot, run, goal = _run_with_seconds_left(FakeRobot, 100.0)
     assert run.move_timeout() == pytest.approx(DEFAULT_MISSION.move_timeout_sec)
-    robot.t = LIMIT - 20.0
+    _wait_until_left(robot, 20.0)
     assert run.move_timeout() == pytest.approx(20.0 - reserve)
 
 
@@ -217,22 +222,18 @@ def test_waiting_at_the_goal_stops_before_the_limit():
     robot, run, goal = _run_with_seconds_left(NeverSteady, 5.0)
     settled = run.settle(goal)
     assert not settled.stable
-    assert LIMIT - robot.t >= DEFAULT_MISSION.finish_reserve_sec
+    assert LIMIT - robot.now() >= DEFAULT_MISSION.finish_reserve_sec
 
 
 def test_a_point_the_move_did_not_reach_is_not_waited_on():
     # 沒移動成功的點不回報（手冊 6.5），等它穩定是白花時間：只讀一筆。
-    class MovesAlwaysFail(NeverSteady):
-        def move_to(self, target, timeout_sec):
-            self.move_calls += 1
-            return MOVE_ABORTED
-
-    robot, run, goal = _run_with_seconds_left(MovesAlwaysFail, 100.0)
-    before = robot.t
+    moves_always_fail = BASE._replace(move_always=MOVE_ABORTED)
+    robot, run, goal = _run_with_seconds_left(NeverSteady, 100.0, moves_always_fail)
+    before = robot.now()
     record = run.visit(goal)
     assert not record.moved and not record.notified
     assert robot.move_calls == DEFAULT_MISSION.max_move_attempts
-    assert robot.t == before
+    assert robot.now() == before
 
 
 def test_waiting_at_a_waypoint_leaves_the_goal_leg_its_reserve():
@@ -267,9 +268,9 @@ def test_the_camera_correction_is_limited_by_slack_too():
 
 def test_reading_the_pose_does_not_retry_inside_the_finish_reserve():
     robot, run, _ = _run_with_seconds_left(NoNavigation, DEFAULT_MISSION.finish_reserve_sec - 0.5)
-    before = robot.t
+    before = robot.now()
     assert run.current_pose() is None
-    assert robot.t == before
+    assert robot.now() == before
 
 
 def test_the_cancel_reserve_covers_how_long_the_node_waits_for_a_cancel():
@@ -324,7 +325,7 @@ def test_the_budget_never_goes_below_the_planned_stop():
 def test_one_unsteady_point_costs_about_one_point_not_three():
     class FirstPointUnsteady(NeverSteady):
         def _bad(self):
-            return not self.passed_ids and not self.judged_ids and self.move_calls <= 2
+            return not self.judge.passed_ids and not self.judge.judged_ids and self.move_calls <= 2
 
         def pose(self):
             return super().pose() if self._bad() else FakeRobot.pose(self)
@@ -347,8 +348,8 @@ def notify_slows_down(after_sec, notify_sec, base=FakeRobot):
 
     class SlowNotify(base):
         def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
-            if self.t > after_sec:
-                self.cfg = self.cfg._replace(notify_sec=notify_sec)
+            if self.now() > after_sec:
+                self.reconfigure(notify_sec=notify_sec)
             return super().notify_checkpoint(checkpoint_id, timeout_sec)
 
     return SlowNotify
@@ -383,14 +384,14 @@ def _unanswered_notify(seconds_left, mission=DEFAULT_MISSION):
     message = random_checkpoints_message(3, 1)
     robot = RecordsNotifies(message, BASE._replace(notify_sec=1000.0), 1)
     run = _Run(robot, mission)
-    robot.t = LIMIT - seconds_left
+    _wait_until_left(robot, seconds_left)
     return robot, run, parse_checkpoints(message).goal
 
 
 def test_a_notification_gets_no_more_time_than_is_left_before_the_finish_call():
     robot, run, goal = _run_with_seconds_left(RecordsNotifies, 100.0)
     assert run.notify(goal)
-    robot.t = LIMIT - 4.0
+    _wait_until_left(robot, 4.0)
     assert run.notify(goal)
     assert robot.timeouts == (
         pytest.approx(DEFAULT_MISSION.notify_timeout_sec),
@@ -400,17 +401,17 @@ def test_a_notification_gets_no_more_time_than_is_left_before_the_finish_call():
 
 def test_no_notification_is_sent_when_there_is_no_time_for_it():
     robot, run, goal = _run_with_seconds_left(RecordsNotifies, DEFAULT_MISSION.finish_call_sec)
-    before = robot.t
+    before = robot.now()
     assert run.notify(goal) is False
     assert robot.timeouts == ()
-    assert robot.t == before
+    assert robot.now() == before
 
 
 def test_a_notification_that_times_out_is_retried_only_while_time_remains():
     robot, run, goal = _unanswered_notify(6.0)
     assert run.notify(goal) is False
     assert len(robot.timeouts) == 1  # 第一次就把時間用到只剩完成回報要的，不再試第二次
-    assert LIMIT - robot.t >= DEFAULT_MISSION.finish_call_sec
+    assert LIMIT - robot.now() >= DEFAULT_MISSION.finish_call_sec
 
 
 def test_the_pause_before_a_retry_counts_against_the_time_left():
@@ -422,16 +423,16 @@ def test_the_pause_before_a_retry_counts_against_the_time_left():
     robot, run, goal = _unanswered_notify(quick.notify_timeout_sec + after_first, quick)
     assert run.notify(goal) is False
     assert len(robot.timeouts) == 1
-    assert LIMIT - robot.t >= quick.finish_call_sec
+    assert LIMIT - robot.now() >= quick.finish_call_sec
 
 
 def test_the_fake_judge_never_sees_a_notification_that_timed_out(three_point_message):
     robot = FakeRobot(three_point_message, BASE._replace(notify_sec=5.0))
     robot.mission_start()
     assert robot.notify_checkpoint(1, 2.0) is False
-    assert robot.t == 2.0 and robot.judged_ids == []
+    assert robot.now() == 2.0 and robot.judge.judged_ids == []
     assert robot.notify_checkpoint(1, 6.0) is True
-    assert robot.judged_ids == [1]
+    assert robot.judge.judged_ids == [1]
 
 
 def test_the_marker_log_is_skipped_inside_the_finish_reserve():
@@ -442,10 +443,10 @@ def test_the_marker_log_is_skipped_inside_the_finish_reserve():
             self.looks += 1
             return None
 
-    robot, run, goal = _run_with_seconds_left(CountsLooks, DEFAULT_MISSION.finish_reserve_sec - 0.5)
+    robot, run, goal = _run_with_seconds_left(CountsLooks, 50.0)
     run.last_pose = Pose(goal.position, target_attitude(goal))
     run.log_marker(goal)
-    assert robot.looks == 0
-    robot.t = LIMIT - 50.0
-    run.log_marker(goal)
     assert robot.looks == 1
+    _wait_until_left(robot, DEFAULT_MISSION.finish_reserve_sec - 0.5)
+    run.log_marker(goal)
+    assert robot.looks == 1  # 進了收尾保留就不再看

@@ -28,7 +28,7 @@
 |---|---|---|
 | `krpc_user/` | `users/catkin_ws/src/krpc_user/` | 官方範本。我們只改了兩處：`launch/krpc_user.launch` 的 `team_user_script` 預設值改成 `user_node.py`，`CMakeLists.txt` 的安裝清單加上它 |
 | `ros/user_node.py` | `…/krpc_user/scripts/user_node.py` | ROS 接線層 |
-| `src/kibo/` | `…/krpc_user/scripts/kibo/` | 任務邏輯；節點從自己旁邊 import |
+| `src/kibo/` | `…/krpc_user/scripts/kibo/` | 任務邏輯；節點從自己旁邊 import。`src/kibo_lab/`（假機器人等本機實驗用的模組）不同步 |
 
 `scripts/sim.sh run` 與 `scripts/pack.sh` 每次都先同步，所以**以本 repo 為準**，不要直接改 `sim/` 裡的檔案。
 也因此 `krpc_user/` 不能單獨拿去建置：它的 `CMakeLists.txt` 列了 `scripts/user_node.py`，那個檔案要同步之後才在。
@@ -62,5 +62,5 @@ My Page → SIMULATION → 上傳 `.tar.gz`，選 Simulator Level（Easy／Norma
 
 ## 尚未驗證
 
-- `scripts/pack.sh` 假設 `packing.sh` 產出 `*.tar.gz` 在 `users/` 底下（看過 `packing.sh`，是這樣；還沒實際上傳過）。
+- `scripts/pack.sh` 不呼叫官方的 `users/packing.sh`，而是跑同一個 `tar` 指令（官方是 `tar -zcvf <名稱>.tar.gz catkin_ws/src`）再多排除 `__pycache__`：那些 `.pyc` 是容器裡的 root 留下的，主機刪不掉。包的內容有測試（`tests/test_flight_package.py`）；還沒實際上傳過。
 - 提交包會包含 `krpc_user/scripts/kibo/`；Web 模擬器的建置流程是否與本機的 `build-user.sh` 相同，要上傳一次才知道。

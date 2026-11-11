@@ -1,24 +1,38 @@
 """假機器人：在沒有模擬器的電腦上把整場任務跑完。
 
 它不是物理模擬：移動秒數直接用 `kibo.motion` 的模型算（可以乘一個 slowdown 假裝比較慢），
-到點有一點誤差、偶爾失敗，外加一個照官方 judge.py 判定等級的假裁判。
+到點有一點誤差、偶爾失敗。過不過、幾分由假裁判（`kibo_lab.fake_judge`）記，在 `robot.judge`。
 用途是比較策略（例如時間預算的參數）與測試流程不卡死；
 分數只能相對比較，不能拿來預測真實成績。
+
+測試要不同的機器人時，先看 `FakeRobotConfig` 有沒有現成的欄位（到點偏移、還沒轉完的滾轉、
+移動一律失敗）；沒有才寫子類別，而且只覆寫 `Robot` 介面的方法、用 `now()` 與 `sleep()` 動時鐘，
+不直接改這裡的內部狀態（要讀真實姿態用 `truth()`，要中途換設定用 `reconfigure()`）。
 """
 
 import random
-from typing import List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from kibo.checkpoints import CheckpointSet, parse_checkpoints
 from kibo.ctl_result import MOVE_ABORTED, MOVE_SUCCESS, MOVE_TIMEOUT
 from kibo.field import START_POSE
-from kibo.geometry import Pose, Quat, Vec3, add, axis_angle_quat, normalize, quat_mul, rotate
-from kibo.judge import judge
+from kibo.geometry import (
+    FORWARD,
+    Pose,
+    Quat,
+    Vec3,
+    add,
+    axis_angle_quat,
+    normalize,
+    quat_mul,
+    rotate,
+)
 from kibo.mission import Robot
 from kibo.motion import Speeds, leg_seconds
 from kibo.navlog import NavLog
-from kibo.scoring import DEFAULT_SCORING, Scoring
 from kibo.vision import expected_marker_in_body
+from kibo_lab.fake_judge import FakeJudge
+from kibo_lab.scoring import DEFAULT_SCORING, Scoring
 
 
 class FakeRobotConfig(NamedTuple):
@@ -37,6 +51,18 @@ class FakeRobotConfig(NamedTuple):
     start_pose: Pose = START_POSE
     camera: bool = False  # 開了才會回 marker_in_body
     vision_noise_m: float = 0.005  # 相機算出的 marker 位置誤差（標準差）
+    # 到點偏移：絕對移動成功後，停在目標旁邊這麼遠的地方（公尺，目標姿態的機體座標）。
+    # 第 k 次到同一個目標用第 k 個，用完了就一直用最後一個；空的就是不偏。
+    # 例：`((0, 0.15, 0),)` 每次都偏 15 cm；`((0, 0.15, 0), (0, 0, 0))` 第一次偏、再去一次就準。
+    arrival_offsets_m: Tuple[Vec3, ...] = ()
+    # 還沒轉完：絕對移動回報成功後的 residual_roll_sec 秒內，機體繞前方軸還差 residual_roll_deg 度，
+    # 之後才到位（真的控制器在姿態進到 0.5 rad 以內就回報成功，不等轉完）。導航與假裁判都看得到。
+    # 兩欄要一起給：只給角度、秒數是 0，等於沒有。
+    residual_roll_deg: float = 0.0
+    residual_roll_sec: float = 0.0
+    # 不是空字串的話，每次絕對移動都不動、直接回這個結果（kibo.ctl_result 的 MOVE_*）；
+    # MOVE_TIMEOUT 會花掉整個逾時，其他的不花時間。
+    move_always: str = ""
 
 
 DEFAULT_FAKE = FakeRobotConfig()
@@ -76,14 +102,11 @@ class FakeRobot(Robot):
         self.rng = random.Random(seed)
         self.message = checkpoints_message
         self.checkpoints: CheckpointSet = parse_checkpoints(checkpoints_message)
-        self.t = 0.0
-        self.true_pose = config.start_pose
-        self.started = False
-        self.finished_at: Optional[float] = None
-        self.passed_levels: List[int] = []
-        self.passed_ids: List[int] = []
-        self.judged_ids: List[int] = []  # 已經被判過的點（過或沒過都算）
-        self.goal_reached = False
+        self.judge = FakeJudge(self.checkpoints, config.scoring)
+        self._t = 0.0  # 時鐘從 0 起算；任務一開始就呼叫 mission_start，所以也是任務時間
+        self._true_pose = config.start_pose  # 轉完之後會停在的姿態；現在真正的姿態是 truth()
+        self._turning_until = 0.0
+        self._arrivals: Dict[Vec3, int] = {}  # 目標位置 -> 成功到過幾次
         self.move_calls = 0
         self.relative_calls = 0
         self.checkpoints_calls = 0
@@ -91,44 +114,68 @@ class FakeRobot(Robot):
         self.stop = False
         self.navlog = NavLog()  # 與真的節點同一種導航紀錄
 
+    def truth(self) -> Pose:
+        """機器人現在真正的姿態：還沒轉完的那幾秒多一個滾轉。假裁判看的是這個；測試可以讀。"""
+        if self.cfg.residual_roll_deg and self._t < self._turning_until:
+            rolled = axis_angle_quat(FORWARD, self.cfg.residual_roll_deg)
+            return Pose(self._true_pose.position, quat_mul(self._true_pose.orientation, rolled))
+        return self._true_pose
+
+    def reconfigure(self, **changes) -> None:
+        """任務進行到一半換設定（例如中途變慢）；給測試的子類別用。"""
+        self.cfg = self.cfg._replace(**changes)
+
+    def _arrival_offset(self, target: Pose) -> Vec3:
+        """這次到 target 要偏多少（世界座標），並記下又到了一次。"""
+        offsets = self.cfg.arrival_offsets_m
+        if not offsets:
+            return (0.0, 0.0, 0.0)
+        earlier = self._arrivals.get(target.position, 0)
+        self._arrivals[target.position] = earlier + 1
+        return rotate(target.orientation, offsets[min(earlier, len(offsets) - 1)])
+
     # ---- Robot 介面 ----
     def now(self) -> float:
-        return self.t
+        return self._t
 
     def sleep(self, sec: float) -> None:
-        self.t += sec
+        self._t += sec
 
     def pose(self) -> Optional[Pose]:
+        truth = self.truth()
         jitter = tuple(self.rng.gauss(0, self.cfg.nav_jitter_m) for _ in range(3))
         return Pose(
-            add(self.true_pose.position, (jitter[0], jitter[1], jitter[2])),
-            self.true_pose.orientation,
-            stamp=self.t,
+            add(truth.position, (jitter[0], jitter[1], jitter[2])),
+            truth.orientation,
+            stamp=self._t,
         )
 
     def move_to(self, target: Pose, timeout_sec: float) -> str:
         self.move_calls += 1
+        if self.cfg.move_always:
+            if self.cfg.move_always == MOVE_TIMEOUT:
+                self._t += timeout_sec
+            return self.cfg.move_always
+        here = self.truth()
         duration = self.cfg.move_overhead_sec + leg_seconds(
-            self.true_pose.position,
-            self.true_pose.orientation,
-            target.position,
-            target.orientation,
-            self.cfg.speeds,
+            here.position, here.orientation, target.position, target.orientation, self.cfg.speeds
         )
         if duration > timeout_sec:
-            self.t += timeout_sec
+            self._t += timeout_sec
             return MOVE_TIMEOUT
         if self.rng.random() < self.cfg.move_fail_prob:
-            self.t += duration / 2.0
+            self._t += duration / 2.0
             return MOVE_ABORTED
-        self.t += duration
+        self._t += duration
         noise: Vec3 = (
             self.rng.gauss(0, self.cfg.position_noise_m),
             self.rng.gauss(0, self.cfg.position_noise_m),
             self.rng.gauss(0, self.cfg.position_noise_m),
         )
         wobble = _random_rotation(self.rng, self.cfg.attitude_noise_deg)
-        self.true_pose = Pose(add(target.position, noise), quat_mul(target.orientation, wobble))
+        position = add(add(target.position, self._arrival_offset(target)), noise)
+        self._true_pose = Pose(position, quat_mul(target.orientation, wobble))
+        self._turning_until = self._t + self.cfg.residual_roll_sec
         self._record_tail()
         return MOVE_SUCCESS
 
@@ -137,33 +184,37 @@ class FakeRobot(Robot):
         steps = int(round(self.cfg.settled_before_return_sec / 0.05))
         if steps <= 0:
             return
+        truth = self.truth()
         for k in range(steps, -1, -1):
-            stamp = self.t - 0.05 * k
-            self.navlog.add(Pose(self.true_pose.position, self.true_pose.orientation, stamp))
+            stamp = self._t - 0.05 * k
+            self.navlog.add(Pose(truth.position, truth.orientation, stamp))
 
     def recent_poses(self, seconds: float) -> List[Pose]:
-        return self.navlog.recent(self.t, seconds)
+        return self.navlog.recent(self._t, seconds)
 
     def marker_in_body(self, marker_id: int) -> Optional[Vec3]:
         """假相機：由真實姿態反推 marker 在機體座標系的位置，加一點雜訊。"""
         if not self.cfg.camera:
             return None
         marker = self.checkpoints.by_id(marker_id).marker_position
-        truth = expected_marker_in_body(self.true_pose.position, self.true_pose.orientation, marker)
-        return add(truth, tuple(self.rng.gauss(0, self.cfg.vision_noise_m) for _ in range(3)))  # type: ignore[arg-type]
+        here = self.truth()
+        seen = expected_marker_in_body(here.position, here.orientation, marker)
+        return add(seen, tuple(self.rng.gauss(0, self.cfg.vision_noise_m) for _ in range(3)))  # type: ignore[arg-type]
 
     def move_relative(self, delta: Vec3, timeout_sec: float) -> str:
         self.relative_calls += 1
-        here = self.true_pose
+        # 相對移動是從「轉完之後會停在的姿態」算的：殘餘滾轉是疊在它上面的暫時量，
+        # 拿正在轉的姿態當起點，會把那幾度永久寫進去。
+        here = self._true_pose
         there = add(here.position, rotate(here.orientation, delta))
-        self.t += self.cfg.move_overhead_sec + leg_seconds(
+        self._t += self.cfg.move_overhead_sec + leg_seconds(
             here.position, here.orientation, there, here.orientation, self.cfg.speeds
         )
-        self.true_pose = Pose(there, here.orientation)
+        self._true_pose = Pose(there, here.orientation)
         return MOVE_SUCCESS
 
     def mission_start(self) -> bool:
-        self.started = True
+        self.judge.mission_start()
         return True
 
     def get_checkpoints_message(self) -> Optional[str]:
@@ -173,42 +224,21 @@ class FakeRobot(Robot):
         return self.message
 
     def notify_checkpoint(self, checkpoint_id: int, timeout_sec: float = float("inf")) -> bool:
-        """假裁判，照官方 judge.py：通知一律被「接受」（回 True 不代表通過），
-        而且**每個點只判第一次**，沒過也不能重來；判定用通知當下的真實姿態。
+        """通知一律被「接受」（回 True 不代表通過）；過不過由假裁判用送出當下的真實姿態判。
 
         來回要 notify_sec；比 timeout_sec 久就是逾時：花掉 timeout_sec、回 False，
         假裁判當作沒收到（真的伺服器有沒有收到不知道，這裡取不利的那一邊）。
         測試直接呼叫時可以不給 timeout_sec，等於不限時。"""
         if self.cfg.notify_sec > timeout_sec:
-            self.t += timeout_sec
+            self._t += timeout_sec
             return False
-        self.t += self.cfg.notify_sec
-        if not self.started or self.finished_at is not None:
-            return True  # 任務開始前、完成回報後的通知，官方只記一行警告
-        if checkpoint_id in self.judged_ids:
-            return True  # 官方只記一行 "already processed"
-        self.judged_ids.append(checkpoint_id)
-        if checkpoint_id not in [cp.id for cp in self.checkpoints.checkpoints]:
-            return True  # 不存在的 id：官方記成「判過、沒過」
-        result = judge(self.true_pose, self.checkpoints.by_id(checkpoint_id))
-        if result.passed:
-            self.passed_ids.append(checkpoint_id)
-            self.passed_levels.append(result.level)
+        sent_from = self.truth()
+        self._t += self.cfg.notify_sec
+        self.judge.checkpoint_passed(checkpoint_id, sent_from)
         return True
 
     def mission_finish(self) -> bool:
-        """官方的完成回報：Goal 點先前通過就算到達；否則用當下姿態再判一次，
-        通過的話 Goal 點也補記為通過（即使先前那次通知沒過）。"""
-        self.finished_at = self.t
-        goal_id = self.checkpoints.goal_id
-        if goal_id in self.passed_ids:
-            self.goal_reached = True
-        else:
-            result = judge(self.true_pose, self.checkpoints.goal)
-            self.goal_reached = result.passed
-            if result.passed:
-                self.passed_ids.append(goal_id)
-                self.passed_levels.append(result.level)
+        self.judge.mission_finish(self.truth(), self._t)
         return True
 
     def stop_requested(self) -> bool:
@@ -216,17 +246,3 @@ class FakeRobot(Robot):
 
     def log(self, message: str) -> None:
         self.logs.append(message)
-
-    # ---- 假裁判的結算 ----
-    def remaining_at_finish(self) -> float:
-        if self.finished_at is None:
-            return 0.0
-        return max(0.0, self.cfg.scoring.time_limit_sec - self.finished_at)
-
-    def score(self, scoring: Optional[Scoring] = None) -> float:
-        """假分數。不給 scoring 就用設定裡的；給 `kibo.scoring.WORLDS` 的某一個可看其他世界。"""
-        rules = scoring or self.cfg.scoring
-        goal = self.goal_reached
-        late = self.finished_at is None or self.finished_at > rules.time_limit_sec
-        all_passed = len(self.passed_ids) == len(self.checkpoints.checkpoints)
-        return rules.total(self.passed_levels, goal, self.remaining_at_finish(), all_passed, late)

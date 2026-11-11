@@ -1,7 +1,7 @@
-"""kibo.tune 的純函式：四世界的最大後悔。"""
+"""kibo_lab.tune 的純函式：四世界的最大後悔。"""
 
-from kibo.scoring import WORLD_NAMES, WORLDS
-from kibo.tune import Row, max_regret
+from kibo_lab.scoring import WORLD_NAMES, WORLDS
+from kibo_lab.tune import Row, max_regret
 
 
 def row(label, b0, b1, a0, a1):

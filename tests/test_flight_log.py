@@ -2,11 +2,12 @@
 log 裡有每段腿的距離與秒數、探針旗標預設全關、報表工具認得 log 的格式。"""
 
 from conftest import PERFECT
+from kibo.checkpoints import parse_checkpoints
 from kibo.ctl_result import MOVE_INVALID
-from kibo.fake_robot import FakeRobot
 from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose
 from kibo.mission import DEFAULT_MISSION, run_mission
+from kibo_lab.fake_robot import FakeRobot
 
 
 class StaleNavRobot(FakeRobot):
@@ -24,28 +25,22 @@ def test_repeated_navigation_sample_never_counts_as_stable(three_point_message):
     assert all(not v.stable for v in report.visits)
 
 
-class ParkedAtFirstCheckpoint(FakeRobot):
+def parked_at_first_checkpoint(message):
     """已經停在 CheckPoint 1 的位置上，但每次移動都回 INVALID。"""
-
-    def __init__(self, message, config, seed=0):
-        super().__init__(message, config, seed)
-        cp = self.checkpoints.by_id(1)
-        self.true_pose = Pose(cp.position, cp.attitude)
-
-    def move_to(self, target, timeout_sec):
-        self.move_calls += 1
-        return MOVE_INVALID
+    cp = parse_checkpoints(message).by_id(1)
+    parked = PERFECT._replace(start_pose=Pose(cp.position, cp.attitude), move_always=MOVE_INVALID)
+    return FakeRobot(message, parked)
 
 
 def test_no_notification_without_a_successful_move_even_if_judge_passes(three_point_message):
-    robot = ParkedAtFirstCheckpoint(three_point_message, PERFECT)
+    robot = parked_at_first_checkpoint(three_point_message)
     report = run_mission(robot, DEFAULT_MISSION)
     first = next(v for v in report.visits if v.checkpoint_id == 1)
     assert first.judged_level == 3 and not first.moved and not first.notified
 
 
 def test_probe_flag_notifies_even_when_move_failed_or_level_is_zero(three_point_message):
-    robot = ParkedAtFirstCheckpoint(three_point_message, PERFECT)
+    robot = parked_at_first_checkpoint(three_point_message)
     report = run_mission(robot, DEFAULT_MISSION._replace(notify_even_if_level0=True))
     assert any(v.notified for v in report.visits)
     assert any("PROBE FLAGS ON" in line for line in robot.logs)
@@ -55,13 +50,13 @@ def test_skip_one_waypoint_probe_leaves_exactly_one_out(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT)
     report = run_mission(robot, DEFAULT_MISSION._replace(skip_one_waypoint=True))
     assert report.goal_reached
-    assert len(robot.passed_ids) == 2
+    assert len(robot.judge.passed_ids) == 2
 
 
 def test_deliberate_late_probe_finishes_after_the_limit(three_point_message):
     robot = FakeRobot(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION._replace(deliberate_late_after=1))
-    assert robot.finished_at is not None and robot.finished_at > TIME_LIMIT_SEC
+    assert robot.judge.finished_at is not None and robot.judge.finished_at > TIME_LIMIT_SEC
 
 
 def test_log_has_distance_turn_and_seconds_for_every_leg(three_point_message):
@@ -105,13 +100,13 @@ def test_deliberate_late_counts_notified_checkpoints_and_honours_stop(three_poin
     class StopDuringWait(FakeRobot):
         def sleep(self, sec):
             super().sleep(sec)
-            if self.t > 200.0:
+            if self.now() > 200.0:
                 self.stop = True
 
     robot = StopDuringWait(three_point_message, PERFECT)
     report = run_mission(robot, DEFAULT_MISSION._replace(deliberate_late_after=1))
     assert report.aborted == "stop requested"
-    assert robot.t < 300.0  # 等到一半就被停下來，沒有硬睡到逾時
+    assert robot.now() < 300.0  # 等到一半就被停下來，沒有硬睡到逾時
 
 
 def test_log_compares_what_the_camera_sees_with_what_navigation_expects(three_point_message):

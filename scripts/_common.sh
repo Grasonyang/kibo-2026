@@ -11,7 +11,8 @@ require_sim() {
   [ -d "$sim_dir" ] || { echo "找不到 $sim_dir，先跑 scripts/setup-sim.sh <krpc7th-simulator.tar.gz>" >&2; exit 1; }
 }
 
-# 把我們的 krpc_user 與 src/kibo 同步進模擬器的 users/（模擬器端的 krpc_user 只讀，以本 repo 為準）。
+# 把我們的 krpc_user、ros/ 與 src/kibo 同步進模擬器的 users/（模擬器端的 krpc_user 只讀，以本 repo 為準）。
+# 提交包就是這個目錄打包的，所以 src/kibo/ 裡只放節點用得到的模組；本機實驗用的在 src/kibo_lab/，不送。
 sync_user() {
   require_sim
   [ -d "$root/krpc_user" ] || { echo "沒有 $root/krpc_user，先跑 scripts/setup-sim.sh 匯入官方範本" >&2; exit 1; }

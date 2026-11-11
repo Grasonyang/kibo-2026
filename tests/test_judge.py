@@ -177,7 +177,7 @@ def test_roll_reading_at_the_goal_marker_amplifies_small_pointing_errors():
     # 官方的滾轉是對「機體到 marker」軸做 twist 分解。Goal（marker 12）的視線幾乎正對世界 -X，
     # 姿態接近繞垂直軸轉 180°，分解在那附近是病態的：只有 1.5° 的指向誤差（機體完全沒滾），
     # 讀數就可能超過 5°。同樣的誤差在其他 marker 只讀到 2° 以內。
-    from kibo.scenarios import random_checkpoints_message
+    from kibo_lab.scenarios import random_checkpoints_message
 
     worst = {}
     for seed in range(10):

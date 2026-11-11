@@ -1,9 +1,10 @@
 """R2：機器人實際比移動模型慢時，用實測把規劃往慢修；模型準時什麼都不動；最多修到 2 倍。"""
 
-from kibo.fake_robot import FakeRobot, FakeRobotConfig
-from kibo.mission import DEFAULT_MISSION, run_mission
+from kibo.mission import DEFAULT_MISSION, _Run, run_mission
 from kibo.motion import Speeds
-from kibo.scenarios import random_checkpoints_message
+from kibo.pace import DEFAULT_PACE, PaceRule
+from kibo_lab.fake_robot import FakeRobot, FakeRobotConfig
+from kibo_lab.scenarios import random_checkpoints_message
 
 NOISY = FakeRobotConfig(position_noise_m=0.05, move_fail_prob=0.1)
 WITHOUT = DEFAULT_MISSION._replace(calibrate_speed=False)
@@ -21,7 +22,7 @@ def fleet(true_slowdown, mission, n=10, runs=6):
         )
         report = run_mission(robot, mission)
         goals += report.goal_reached
-        scores.append(robot.score())
+        scores.append(robot.judge.score())
         calibrated_runs += any("speed calibrated" in line for line in robot.logs)
     return goals, sum(scores) / runs, calibrated_runs
 
@@ -85,7 +86,7 @@ def test_long_leg_gets_a_longer_timeout(three_point_message):
     robot = FakeRobot(three_point_message, slow)
     run_mission(robot, mission)
     assert any("move to #6 attempt 1: success" in line for line in robot.logs)
-    assert 6 in robot.passed_ids
+    assert 6 in robot.judge.passed_ids
 
 
 def test_a_timed_out_leg_counts_as_evidence_of_slowness():
@@ -97,3 +98,19 @@ def test_a_timed_out_leg_counts_as_evidence_of_slowness():
     logs = robot.logs
     first_timeout = next(i for i, line in enumerate(logs) if "TIMED OUT, lower bound" in line)
     assert any("speed calibrated" in line for line in logs[first_timeout:])
+
+
+def test_every_calibration_setting_reaches_the_pace_rule(three_point_message):
+    # 規則本身在 test_pace.py 用數字測；這裡守「任務設定的每一欄都接到了節奏」。
+    odd = DEFAULT_MISSION._replace(
+        calibrate_speed=False,
+        min_speed_ratio=0.4,
+        calibrate_below_ratio=0.8,
+        calibrate_min_leg_m=0.7,
+        calibrate_min_predicted_sec=33.0,
+    )
+    run = _Run(FakeRobot(three_point_message), odd)
+    assert run.pace.rule == PaceRule(
+        enabled=False, min_speed_ratio=0.4, below_ratio=0.8, min_leg_m=0.7, min_predicted_sec=33.0
+    )
+    assert _Run(FakeRobot(three_point_message), DEFAULT_MISSION).pace.rule == DEFAULT_PACE

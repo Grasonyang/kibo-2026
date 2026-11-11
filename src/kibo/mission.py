@@ -6,7 +6,7 @@
     → 回報通過 → 下一點 …… → Goal → 完成回報
 
 所有跟機器人說話的動作都透過 `Robot` 介面。ROS 版在 `ros/user_node.py`，假的版本在
-`kibo/fake_robot.py`，所以這裡的邏輯可以在沒有模擬器的電腦上整場跑完。
+`kibo_lab/fake_robot.py`（本機實驗用，不進提交包），所以這裡的邏輯可以在沒有模擬器的電腦上整場跑完。
 
 安全原則（手冊第 5 章、6.5）：每個迴圈都有次數上限，每個等待都有時間上限，
 失敗有重試上限，收到停止要求就立刻收尾。
@@ -22,6 +22,7 @@ from kibo.field import TIME_LIMIT_SEC
 from kibo.geometry import Pose, Vec3, distance, norm, quat_angle
 from kibo.judge import Judgement
 from kibo.motion import Speeds, leg_seconds
+from kibo.pace import DEFAULT_PACE, Pace, PaceRule
 from kibo.settle import SettleRule, Steadiness
 from kibo.vision import body_correction, expected_marker_in_body
 
@@ -111,19 +112,17 @@ class MissionConfig(NamedTuple):
     camera_fix_max_m: float = (
         0.0  # 相機修正量的上限；0 = 關（預設關：ROS 端座標未驗證，增益 fake-sensitive）
     )
-    calibrate_speed: bool = True  # 用實測的移動秒數修正時間預算（只往慢的方向）
-    min_speed_ratio: float = 0.5  # 校正的上限：最多當作比模型慢 1/0.5 = 2 倍
-    # 死區：實測在模型的 1/0.9 = 1.11 倍以內不校正。原本是 1.25 倍；慢 20% 到 24% 落在裡面完全不修，
-    # 15 秒的保險被吃光（council sim-bringup-review 的 S1）。模型在模擬器上每段腿只差一兩秒
-    # （docs/kibo/motion-model.md 的各場實測）。
-    calibrate_below_ratio: float = 0.9
-    calibrate_min_leg_m: float = 0.5  # 只用這麼長以上的腿校正
+    # 速度校正的五欄（另一欄在後面）：意思與預設值都在 kibo.pace 的 PaceRule，這裡只是攤平。
+    calibrate_speed: bool = DEFAULT_PACE.enabled
+    min_speed_ratio: float = DEFAULT_PACE.min_speed_ratio
+    calibrate_below_ratio: float = DEFAULT_PACE.below_ratio
+    calibrate_min_leg_m: float = DEFAULT_PACE.min_leg_m
     # 探針旗標：只在資格賽的模擬器上做實驗用，預設全關，決賽程式不得開啟。
     notify_even_if_level0: bool = False  # 自判沒過也回報一次，拿伺服器的判定來校準自判
     skip_one_waypoint: bool = False  # 故意漏掉一個中途點，看 Goal 分數是否還給
     deliberate_late_after: int = 0  # 成功回報這麼多點之後故意等到逾時，看逾時規則；0 = 關
     # 以下兩欄不是探針；排在後面只因為欄位順序是介面的一部分，不隨意更動。
-    calibrate_min_predicted_sec: float = 20.0  # 長腿的模型秒數累積到這麼多才校正，一段腿不算數
+    calibrate_min_predicted_sec: float = DEFAULT_PACE.min_predicted_sec
     log_marker: bool = True  # 每到一點記一行「相機看到的 marker 位置 vs 導航算的預期位置」，只記錄
     # 收尾保留：完成回報晚於時限可能整場沒分，所以到點後的等待最晚只等到時限前 finish_reserve_sec
     # （之後還要回報這一點、送完成回報）；移動的逾時再早 cancel_reserve_sec（逾時後取消 action
@@ -196,8 +195,15 @@ class _Run:
         self.speeds: Speeds = config.budget.speeds  # 會被實測往慢的方向修
         self.reserved_sec = 0.0  # 目前這一點之後還要飛多久（_fly 每一點更新）
         self.stops: List[float] = []  # 每一點實際停留的秒數（到點到回報完），見 stop_sec
-        self.predicted_sec = 0.0  # 長腿的模型預測秒數累積
-        self.actual_sec = 0.0  # 同一批腿的實際秒數累積
+        self.pace = Pace(
+            PaceRule(
+                enabled=config.calibrate_speed,
+                min_speed_ratio=config.min_speed_ratio,
+                below_ratio=config.calibrate_below_ratio,
+                min_leg_m=config.calibrate_min_leg_m,
+                min_predicted_sec=config.calibrate_min_predicted_sec,
+            )
+        )
 
     def elapsed(self) -> float:
         return self.robot.now() - self.t0
@@ -289,15 +295,10 @@ class _Run:
     def record_leg(
         self, start: Optional[Pose], target: Pose, seconds: float, timed_out: bool = False
     ) -> None:
-        """一段移動：記錄距離與秒數，必要時把規劃用的速度往慢修。
+        """一段移動：記一行距離與秒數，餵給節奏（kibo.pace），照它的結論修規劃用的速度。
 
-        逾時的腿也算證據：實際秒數至少是逾時值，所以算出來的「慢幾倍」是下界，
-        只會把速度往慢修，方向安全；沒有它，比假設慢很多的機器人會一直逾時、永遠學不到。
-
-        比的是「模型預測的秒數」對「實際秒數」。模型在本機模擬器上每段腿只差一兩秒，
-        所以這是保險：Web 模擬器或實機若整體比較慢，實測會把規劃用的秒數等比例放大。
-        慢超過死區才動，只往慢修，最多 2 倍；很短的腿不算（一兩秒的誤差佔比太大）。
-        """
+        逾時的腿也餵：實際秒數至少是逾時值，算出來的「慢幾倍」是下界，方向安全；
+        沒有它，比假設慢很多的機器人會一直逾時、永遠學不到。"""
         if start is None or seconds <= 0.0:
             return
         metres = distance(start.position, target.position)
@@ -315,21 +316,13 @@ class _Run:
                 " TIMED OUT, lower bound" if timed_out else "",
             )
         )
-        if not self.cfg.calibrate_speed or metres < self.cfg.calibrate_min_leg_m:
-            return
-        self.predicted_sec += predicted
-        self.actual_sec += seconds
-        if self.predicted_sec < self.cfg.calibrate_min_predicted_sec:
-            return  # 一兩段腿不足以下結論
-        slowdown = self.actual_sec / self.predicted_sec
-        if slowdown <= 1.0 / self.cfg.calibrate_below_ratio:
-            slowdown = 1.0  # 在死區內：用預設值（已校正過的也拉回預設，不留棘輪）
-        slowdown = min(slowdown, 1.0 / self.cfg.min_speed_ratio)
+        self.pace.add_leg(metres, predicted, seconds)
+        slowdown = self.pace.slowdown()
         calibrated = default._replace(slowdown=default.slowdown * slowdown)
         if abs(calibrated.slowdown - self.speeds.slowdown) > 1e-9:
             self.log(
                 "speed calibrated: slowdown %.2f -> %.2f (x%.2f vs model, over %.0fs of legs)"
-                % (self.speeds.slowdown, calibrated.slowdown, slowdown, self.predicted_sec)
+                % (self.speeds.slowdown, calibrated.slowdown, slowdown, self.pace.predicted_sec)
             )
             self.speeds = calibrated
 

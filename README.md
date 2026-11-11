@@ -15,7 +15,9 @@
 
 | 路徑 | 用途 |
 |---|---|
-| `src/kibo/`、`tests/` | 不依賴 ROS 的任務邏輯、假機器人與單元測試 |
+| `src/kibo/` | 不依賴 ROS 的任務邏輯；整個目錄會進提交包，所以只放節點用得到的模組 |
+| `src/kibo_lab/` | 本機實驗用：假機器人、假裁判、隨機場景、假設的分數表、參數掃描；不進提交包 |
+| `tests/` | 單元測試（pytest） |
 | `ros/` | ROS 接線層 `user_node.py` 與起跑訊號的保險 `start_watch.py`，要放進官方範本才能跑 |
 | `docs/solution/` | 解法說明、spec、tickets、點子 |
 | `krpc_user/` | 提交給模擬器的 catkin package（官方範本，launch 改成啟動我們的節點） |
@@ -30,7 +32,7 @@
 ```bash
 uv sync --locked          # 本機工具（ruff、pyright、pytest、vermin）
 uv run pytest             # 純邏輯的單元測試
-uv run python -m kibo.simulate --runs 10   # 本機假機器人跑 10 場
+uv run python -m kibo_lab.simulate --runs 10   # 本機假機器人跑 10 場
 ```
 
 要跑模擬器，先從 <https://jaxa.krpc.jp/download> 下載開發資源（不用登入），見 [docs/kibo/simulator.md](docs/kibo/simulator.md)。
