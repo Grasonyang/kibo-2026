@@ -172,9 +172,16 @@ class FakeRobot(Robot):
             return None
         return self.message
 
-    def notify_checkpoint(self, checkpoint_id: int) -> bool:
+    def notify_checkpoint(self, checkpoint_id: int, timeout_sec: float = float("inf")) -> bool:
         """假裁判，照官方 judge.py：通知一律被「接受」（回 True 不代表通過），
-        而且**每個點只判第一次**，沒過也不能重來；判定用通知當下的真實姿態。"""
+        而且**每個點只判第一次**，沒過也不能重來；判定用通知當下的真實姿態。
+
+        來回要 notify_sec；比 timeout_sec 久就是逾時：花掉 timeout_sec、回 False，
+        假裁判當作沒收到（真的伺服器有沒有收到不知道，這裡取不利的那一邊）。
+        測試直接呼叫時可以不給 timeout_sec，等於不限時。"""
+        if self.cfg.notify_sec > timeout_sec:
+            self.t += timeout_sec
+            return False
         self.t += self.cfg.notify_sec
         if not self.started or self.finished_at is not None:
             return True  # 任務開始前、完成回報後的通知，官方只記一行警告
