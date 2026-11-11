@@ -28,6 +28,7 @@
 |---|---|---|
 | `krpc_user/` | `users/catkin_ws/src/krpc_user/` | 官方範本。我們只改了兩處：`launch/krpc_user.launch` 的 `team_user_script` 預設值改成 `user_node.py`，`CMakeLists.txt` 的安裝清單加上它 |
 | `ros/user_node.py` | `…/krpc_user/scripts/user_node.py` | ROS 接線層 |
+| （同步時產生） | `…/krpc_user/scripts/build_stamp.txt` | 這次同步的 commit，有未提交的改動時帶 `+dirty`；節點啟動時印出來，也會進提交包 |
 | `src/kibo/` | `…/krpc_user/scripts/kibo/` | 任務邏輯；節點從自己旁邊 import。`src/kibo_lab/`（假機器人等本機實驗用的模組）不同步 |
 
 `scripts/sim.sh run` 與 `scripts/pack.sh` 每次都先同步，所以**以本 repo 為準**，不要直接改 `sim/` 裡的檔案。

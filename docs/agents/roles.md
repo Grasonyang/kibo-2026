@@ -26,7 +26,7 @@ Claude 與 Codex 都用同一組三個標準角色：**planner**、**worker**、
 
 ## reviewer
 
-- **輸入**：明確的 `base..HEAD` 範圍，以及要審的軸：**Standards**（符合專案 coding standards 與常見 smell）或 **Spec**（忠實實作來源 issue 或 spec）。
+- **輸入**：明確的 `base..HEAD` 範圍，以及要審的軸：**Standards**（符合專案 coding standards 與常見 smell）或 **Spec**（忠實實作來源 issue 或 spec）。協調者照 [review-brief.md](./review-brief.md) 的範本寫 brief。
 - **輸出**：具體問題清單（檔案、行、原因、建議），沒問題就明說沒有。
 - **常用 skill**：`code-review`。
 - **邊界**：唯讀；全新 context，不沿用 worker 的對話，避免被其推理帶偏。Standards 與 Spec 兩軸各開一個 reviewer 平行跑，互不污染。

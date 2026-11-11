@@ -95,5 +95,6 @@ def test_the_submission_package_has_the_node_the_flight_modules_and_nothing_else
         ["kibo/" + name for name in _python_files(FLIGHT)]
         + _python_files(NODE)
         + ["user_template.py"]  # 官方範本，照原樣留著
+        + ["build_stamp.txt"]  # 這一包是哪個 commit 打的（tests/test_buildstamp.py）
     )
     assert packed == sorted(expected)

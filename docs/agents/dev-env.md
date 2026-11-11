@@ -71,6 +71,8 @@ ROS 相關程式（要 `import rospy`、`krpc_ib2_msgs`）只能在模擬器的�
 跑模擬器時要守的四件事（每一件都實際出過事）：
 
 - **以官方的結果為準**：跑完用 `uv run python scripts/sim_report.py --last 1` 看 `result.json` 的等級。節點自己的 log 顯示「任務完成」不代表有成績。
+- **每場跑的是哪一版**：報表的「版本」欄是同步進模擬器的 commit，工作目錄有未提交的改動時帶 `+dirty`（`scripts/_common.sh` 的 `sync_user` 寫 `build_stamp.txt`，節點啟動時印 `build: <版本>`）。要拿一場當證據，先 commit 再跑，版本欄才對得回去。
+- **「模擬器啟動失敗」的場次不算**：那是模擬器的問題（[simulator-internals.md](../kibo/simulator-internals.md) 的 E10），重跑。
 - **「無成績」先分辨是誰的問題**：`judge_module_logs/judge.log` 有 `before mission start` 是起跑保護沒擋住；`system.log` 有 `Plugins for the model will not be loaded` 是模擬器自己啟動失敗，重跑即可。
 - **起跑流程有自己的重現腳本**：`scripts/start-signal/run.sh "<模式…>" <次數>` 用兩個容器重現「起跑訊號漏接」（只需要官方映像，不啟動模擬器本體，一次約 5 秒）。動到 `ros/user_node.py` 的啟動段或 `ros/start_watch.py` 時跑 `"plain watch" 60` 與 `"drop drop+watch" 10`。
 - **背景連跑多場時不要改 `src/`、`ros/`、`krpc_user/`**：`scripts/sim.sh run` 每一場啟動時才同步程式碼，後面的場次會吃到改到一半的檔案。要改就開另一個 worktree。
