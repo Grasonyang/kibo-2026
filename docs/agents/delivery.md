@@ -85,7 +85,9 @@ planner、worker、reviewer 之間怎麼交接，工作怎麼記錄，程式碼�
 - **使用的 Skill**：<清單>
 ```
 
-嚴重度：blocker 不修不能合併；major 應該修；minor、nit 由 worker 判斷。
+嚴重度：blocker 不修不能合併；major 應該修；minor、nit 由 worker 判斷。Standards 軸的 smell 是判斷題，最多標 minor，並註明是哪個 smell。
+
+協調者寫給 reviewer 的 brief 照 [review-brief.md](./review-brief.md)。
 
 ## Worktree 與 Git
 

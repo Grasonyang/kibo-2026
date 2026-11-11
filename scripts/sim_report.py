@@ -30,7 +30,8 @@ LEG_START = re.compile(r"\[t=([0-9.]+)[^\]]*\] route \[")
 LEG_END = re.compile(r"\[t=([0-9.]+)[^\]]*\] move to #(\d+) attempt 1: (\w+)")
 # 模擬器載入 IB2 模型失敗時 Gazebo 印在 system.log 的那一行（E10）。原文每段字之間夾著終端機的
 # 顏色碼，比對前要先去掉。system.log 一場有幾百 MB，這一行在開機階段（實測在第 325 行、
-# 約 14 KB 處），所以只看開頭一段。
+# 約 14 KB 處），所以只看開頭一段。這是假設：那一行若出現在這一段之後，報表會把壞掉的場次當成
+# 一般場次列出來，沒有任何訊號。看到「0 點、腿的誤差幾十秒」的場次，先自己去 system.log 找這一行。
 SIM_FAILED = "Sensors failed to initialize when loading model[ib2]"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 SYSTEM_LOG_HEAD_BYTES = 2 * 1024 * 1024
@@ -82,8 +83,8 @@ def simulator_failed(system_log: str) -> bool:
 
 def read_run(path: str) -> Dict:
     run: Dict = {"name": os.path.basename(path), "legs": []}
-    user_log = os.path.join(path, "user_programs_logs", "user_program_output.log")
-    run["build"] = find_build(_lines(user_log))
+    lines = _lines(os.path.join(path, "user_programs_logs", "user_program_output.log"))
+    run["build"] = find_build(lines)
     run["sim_failed"] = simulator_failed(os.path.join(path, "judge_module_logs", "system.log"))
     try:
         with open(os.path.join(path, "cheat_sheet.json")) as f:
@@ -108,10 +109,6 @@ def read_run(path: str) -> Dict:
     try:
         with open(os.path.join(path, "judge_module_logs", "localization_history.txt")) as f:
             history = [json.loads(line) for line in f]
-        with open(
-            os.path.join(path, "user_programs_logs", "user_program_output.log"), errors="replace"
-        ) as f:
-            lines = f.readlines()
     except (OSError, ValueError):
         return run
     if not history:

@@ -39,7 +39,7 @@
 | 設定分組 | `MissionConfig` 分成八組（時間、預算、移動、穩定、重試、相機、節奏、探針），沒有一欄多用；探針自己一組，節點只碰那一組 | #4 |
 | 提交包只帶飛行模組 | 假機器人等本機實驗用的模組搬到 `src/kibo_lab/`，不進提交包；打包時排除 `__pycache__`；速度校正的規則抽成 `kibo/pace.py`；假裁判獨立成模組 | #5 |
 
-驗證現況：`scripts/check.sh` 全過（ruff、pyright、vermin 3.6、303 個測試）。
+驗證現況：`scripts/check.sh` 全過（ruff、pyright、vermin 3.6、307 個測試）。
 
 ### 「整場沒有成績」的三種情況，現在都有防護
 

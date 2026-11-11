@@ -41,6 +41,14 @@ def test_a_stamp_is_one_short_word_whatever_the_file_holds(tmp_path):
     assert read_build_stamp(str(odd)) == "abc1234"
 
 
+@pytest.mark.parametrize("content", ["abc1234!!!x\n", "x" * 41 + "\n", "a%sb\n", "\ufeffabc1234\n"])
+def test_a_first_word_that_does_not_look_like_a_stamp_reads_as_unknown(tmp_path, content):
+    # 不截一段來用：戳記要嘛整個可信，要嘛不知道。% 之類的符號也不能進 log 的格式字串。
+    odd = tmp_path / "build_stamp.txt"
+    odd.write_text(content, encoding="utf-8")
+    assert read_build_stamp(str(odd)) == UNKNOWN
+
+
 def test_the_line_the_node_logs_can_be_found_again_in_the_log():
     log = [
         "[rosout][INFO] 2026-11-11 06:47:13,470: " + build_line("a149a80+dirty") + "\n",
@@ -57,6 +65,7 @@ def test_the_line_the_node_logs_can_be_found_again_in_the_log():
 def _git(repo, *args):
     done = subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+        + ["-c", "commit.gpgsign=false"]  # 使用者全域開了簽章也不要在測試裡簽
         + list(args),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -103,6 +112,11 @@ def test_syncing_writes_the_commit_and_whether_the_tree_was_clean(tmp_path):
     stamp, output = _packed_stamp(repo, tmp_path, "Clean")
     assert stamp == commit
     assert "未提交" not in output
+
+    (repo / "src" / "kibo" / "brand_new.py").write_text("# 新檔，還沒 git add\n")
+    stamp, _ = _packed_stamp(repo, tmp_path, "Untracked")
+    assert stamp == commit + "+dirty"
+    (repo / "src" / "kibo" / "brand_new.py").unlink()
 
     (repo / "ros" / "user_node.py").write_text("# 改了沒提交\n")
     stamp, output = _packed_stamp(repo, tmp_path, "Dirty")

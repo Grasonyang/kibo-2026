@@ -19,7 +19,8 @@ _MAX_CHARS = 200  # 只讀第一行的開頭；檔案再怪也不多讀
 
 
 def read_build_stamp(path: str) -> str:
-    """戳記檔第一行的第一個字；檔案不在、讀不了、內容不像戳記都回 UNKNOWN，不丟例外。"""
+    """戳記檔第一行的第一個字；檔案不在、讀不了、那個字不像戳記（有別的符號、超過 40 個字元）
+    都回 UNKNOWN，不丟例外。"""
     try:
         with open(path, encoding="utf-8") as stamp_file:
             words = stamp_file.readline(_MAX_CHARS).split()
@@ -27,8 +28,7 @@ def read_build_stamp(path: str) -> str:
         return UNKNOWN
     if not words:
         return UNKNOWN
-    found = _STAMP.match(words[0])
-    return found.group(0) if found else UNKNOWN
+    return words[0] if _STAMP.fullmatch(words[0]) else UNKNOWN
 
 
 def build_line(stamp: str) -> str:
