@@ -15,7 +15,8 @@ require_sim() {
 sync_user() {
   require_sim
   [ -d "$root/krpc_user" ] || { echo "沒有 $root/krpc_user，先跑 scripts/setup-sim.sh 匯入官方範本" >&2; exit 1; }
-  rsync -a --delete --exclude 'scripts/kibo' "$root/krpc_user/" "$user_pkg/"
+  # __pycache__ 是容器裡的 root 寫的，主機這邊刪不掉；留著無妨（Python 會照原始檔的時間重編）
+  rsync -a --delete --exclude 'scripts/kibo' --exclude '__pycache__' "$root/krpc_user/" "$user_pkg/"
   mkdir -p "$user_pkg/scripts"
   rsync -a --exclude 'README.md' "$root/ros/" "$user_pkg/scripts/"
   rsync -a --delete --exclude '__pycache__' "$root/src/kibo/" "$user_pkg/scripts/kibo/"

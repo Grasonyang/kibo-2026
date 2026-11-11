@@ -75,6 +75,7 @@ G2 加上 J4：保持伺服器給的姿態時，側向偏 8.8 cm 對中就掉到
 | E8 | **官方的滾轉量測在 Goal（marker 12）是病態的。** twist 角是 `2·atan2(q_vec·axis, q_w)`；機體朝世界 −X 看時姿態接近「繞垂直軸轉 180°」，分子分母都接近 0 | 模型：1.5° 的指向誤差加 6 mm 位置誤差、機體完全沒滾，marker 12 的讀數最大 16°，其他 marker 最大 2°（`tests/test_judge.py` 有對應測試）。實測：Goal 回報當下的讀數常在 5–9°，到位後會先衝到 13–18° 再降回來 |
 | E9 | 評分模組用的姿態比我們看到的舊（J2），所以自判與官方可能差一級 | 場次 `20261110131242`（hard）：Goal 自判 Lv2（滾轉 19.5°，機體還在轉），官方給 Lv1。其餘 60 幾個點自判與官方一致 |
 | E10 | 模擬器自己偶爾啟動失敗，機器人整場不受控 | 場次 `20261110130057`：`system.log` 有 `Sensors failed to initialize when loading model[ib2] … Plugins for the model will not be loaded`，機器人從 Dock 漂到 z=1.85 m |
+| E11 | **起跑訊號 `/ib2_user/start` 只保留 3 秒，master 的通知晚了就收不到，節點整場不動。** `run.sh` 的 `go` 用 `rostopic pub --once` 送；master 通知訂閱者「有新的發佈者」偶爾要 5 秒多（E3 的名稱查詢延遲發生在 master 那一側，我們管不到）。節點自己輪詢 master、沒連上就主動去連（`ros/start_watch.py`）。蓋得到「通知晚到或沒到」與「問發佈者怎麼連時卡住」；蓋不到「已經問到、TCP 連線卻卡住」。節點啟動超過 1 小時才起跑時保險已經結束 | 場次 `20261110204911`（hard）：節點 ready 後 600 秒都沒有 `start`，記錄裡沒有 `topic[/ib2_user/start] adding connection`。`scripts/start-signal/run.sh`（兩個容器、不啟動模擬器本體）：無保險 60 次漏接 3 次，三次通知都在 5.4 到 6.3 秒才到；有保險 60 次漏接 0 次；把通知丟掉時無保險 4/4 漏接、有保險 4/4 收到 |
 
 我們的對策：
 - E1 → 起跑前先等 `/event/mission_start` 服務出現，再問 master 誰發、誰訂 `/gs/data`，並問發佈者它的連線；

@@ -5,6 +5,7 @@
 
 | 檔案 | 用途 |
 |---|---|
+| `start_watch.py` | 起跑訊號的保險：有人在發 `/ib2_user/start` 而我們沒連上時自己去連（[simulator-internals.md](../docs/kibo/simulator-internals.md) 的 E11）。`user_node.py` 在 ready 之後開一個 daemon thread 跑它 |
 | `user_node.py` | ROS 節點：`RosRobot` 實作 `kibo.mission.Robot`（含選用的相機修正 `marker_in_body`、`move_relative`），`UserNode` 保留官方要求的 start／stop／ready 三個介面 |
 
 怎麼組進官方範本、怎麼跑，見 [docs/kibo/simulator.md](../docs/kibo/simulator.md)。
@@ -19,6 +20,7 @@
 - 起跑時服務呼叫卡 5 秒的問題與修法（`RES_OPTIONS=single-request`）寫在 `user_node.py` 開頭。
 - **起跑前要等事件 topic 的訂閱者都連上**（`_wait_for_event_listeners`），否則「任務開始」會遺失、整場沒有成績。
   每次改動後都要看 `judge_module_logs/result.json`（或跑 `scripts/sim_report.py`），不能只看節點自己的 log。
+- **起跑訊號本身也會漏**（2026-11-11）：發佈者只存在 3 秒，master 的通知晚了節點就整場不動。`start_watch.py` 是保險；動到起跑流程時用 `scripts/start-signal/run.sh "plain watch" 60` 重新量（一次約 5 秒，不用啟動模擬器本體）。
 - 相機偵測得到 marker（`DICT_4X4_50`），但深度與導航差約 15 cm，相機修正維持關閉。
 
 還沒驗證：相機修正（預設關）、`/ib2_user/stop` 的中途停止、Web 模擬器。
