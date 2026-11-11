@@ -27,10 +27,10 @@ def test_fake_robot_can_be_scored_in_any_world(three_point_message):
     from kibo.mission import DEFAULT_MISSION, run_mission
 
     class SkipsOne(FakeRobot):
-        def notify_checkpoint(self, checkpoint_id):
+        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
             if checkpoint_id == 6:
                 return False
-            return super().notify_checkpoint(checkpoint_id)
+            return super().notify_checkpoint(checkpoint_id, timeout_sec)
 
     robot = SkipsOne(three_point_message, PERFECT)
     run_mission(robot, DEFAULT_MISSION)

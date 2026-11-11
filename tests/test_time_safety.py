@@ -337,3 +337,129 @@ def test_one_unsteady_point_costs_about_one_point_not_three():
     assert goals_unsteady == goals
     for count in COUNTS:
         assert unsteady[count] >= usual[count] - 1.5
+
+
+# ---- 通知本身卡住（issue #17）----
+
+
+def notify_slows_down(after_sec, notify_sec, base=FakeRobot):
+    """任務進行到 after_sec 之後，每一次通過通知都要 notify_sec 才回來（伺服器或網路出問題）。"""
+
+    class SlowNotify(base):
+        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
+            if self.t > after_sec:
+                self.cfg = self.cfg._replace(notify_sec=notify_sec)
+            return super().notify_checkpoint(checkpoint_id, timeout_sec)
+
+    return SlowNotify
+
+
+@pytest.mark.parametrize(
+    "robot_class, slowdown",
+    [
+        (notify_slows_down(150.0, 15.3), 1.0),  # 曾經 90 場裡 3 場在 302.9 秒才完成
+        (notify_slows_down(0.0, 4.0, NeverSteady), 1.2),  # 3 秒以上就會超時的門檻之上
+        (notify_slows_down(200.0, 60.0), 1.0),  # 比任務層給的上限還久：每次都逾時
+        (slow_to_cancel(notify_slows_down(100.0, 8.0)), 1.5),
+    ],
+)
+def test_a_stuck_notification_cannot_delay_the_finish_report(robot_class, slowdown):
+    latest, _, _ = fleet(robot_class, slowdown)
+    assert latest <= LIMIT - 0.5
+
+
+def test_a_notification_gets_no_more_time_than_is_left_before_the_finish_call():
+    class RecordsTimeout(FakeRobot):
+        timeouts = ()
+
+        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
+            self.timeouts += (timeout_sec,)
+            return super().notify_checkpoint(checkpoint_id, timeout_sec)
+
+    robot, run, goal = _run_with_seconds_left(RecordsTimeout, 100.0)
+    assert run.notify(goal)
+    robot.t = LIMIT - 4.0
+    assert run.notify(goal)
+    assert robot.timeouts == (
+        pytest.approx(DEFAULT_MISSION.notify_timeout_sec),
+        pytest.approx(4.0 - DEFAULT_MISSION.finish_call_sec),
+    )
+
+
+def test_no_notification_is_sent_when_there_is_no_time_for_it():
+    class CountsNotifies(FakeRobot):
+        notifies = 0
+
+        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
+            self.notifies += 1
+            return super().notify_checkpoint(checkpoint_id, timeout_sec)
+
+    robot, run, goal = _run_with_seconds_left(CountsNotifies, DEFAULT_MISSION.finish_call_sec)
+    before = robot.t
+    assert run.notify(goal) is False
+    assert robot.notifies == 0
+    assert robot.t == before
+
+
+def test_a_notification_that_times_out_is_retried_only_while_time_remains():
+    class NeverAnswers(FakeRobot):
+        notifies = 0
+
+        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
+            self.notifies += 1
+            return super().notify_checkpoint(checkpoint_id, timeout_sec)
+
+    slow = BASE._replace(notify_sec=1000.0)
+    robot = NeverAnswers(random_checkpoints_message(3, 1), slow, 1)
+    run = _Run(robot, DEFAULT_MISSION)
+    goal = parse_checkpoints(random_checkpoints_message(3, 1)).goal
+    robot.t = LIMIT - 6.0
+    assert run.notify(goal) is False
+    assert robot.notifies == 1  # 第一次就把時間用到只剩完成回報要的，不再試第二次
+    assert LIMIT - robot.t >= DEFAULT_MISSION.finish_call_sec
+
+
+def test_the_pause_before_a_retry_counts_against_the_time_left():
+    class NeverAnswers(FakeRobot):
+        notifies = 0
+
+        def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
+            self.notifies += 1
+            return super().notify_checkpoint(checkpoint_id, timeout_sec)
+
+    message = random_checkpoints_message(3, 1)
+    robot = NeverAnswers(message, BASE._replace(notify_sec=1000.0), 1)
+    quick = DEFAULT_MISSION._replace(notify_timeout_sec=2.0)
+    run = _Run(robot, quick)
+    # 第一次逾時後剩 1.3 秒：扣掉完成回報的 1 秒還有 0.3 秒，看似夠再試一次，
+    # 但重試前要先停 0.25 秒，停完就不夠了。
+    robot.t = LIMIT - 3.3
+    assert run.notify(parse_checkpoints(message).goal) is False
+    assert robot.notifies == 1
+    assert LIMIT - robot.t >= quick.finish_call_sec
+
+
+def test_the_fake_judge_never_sees_a_notification_that_timed_out(three_point_message):
+    robot = FakeRobot(three_point_message, BASE._replace(notify_sec=5.0))
+    robot.mission_start()
+    assert robot.notify_checkpoint(1, 2.0) is False
+    assert robot.t == 2.0 and robot.judged_ids == []
+    assert robot.notify_checkpoint(1, 6.0) is True
+    assert robot.judged_ids == [1]
+
+
+def test_the_marker_log_is_skipped_inside_the_finish_reserve():
+    class CountsLooks(FakeRobot):
+        looks = 0
+
+        def marker_in_body(self, marker_id):
+            self.looks += 1
+            return None
+
+    robot, run, goal = _run_with_seconds_left(CountsLooks, DEFAULT_MISSION.finish_reserve_sec - 0.5)
+    run.last_pose = Pose(goal.position, target_attitude(goal))
+    run.log_marker(goal)
+    assert robot.looks == 0
+    robot.t = LIMIT - 50.0
+    run.log_marker(goal)
+    assert robot.looks == 1

@@ -58,8 +58,10 @@ class Robot(ABC):
         """`/mission/get_checkpoints` 回應裡的 JSON 字串；失敗回 None。"""
 
     @abstractmethod
-    def notify_checkpoint(self, checkpoint_id: int) -> bool:
-        """呼叫 /event/checkpoint_passed，回傳伺服器是否接受。"""
+    def notify_checkpoint(self, checkpoint_id: int, timeout_sec: float) -> bool:
+        """呼叫 /event/checkpoint_passed，回傳伺服器是否接受。
+
+        最多花 timeout_sec（含等伺服器出現）；逾時回 False，而且不能再多等取消的回應。"""
 
     @abstractmethod
     def mission_finish(self) -> bool:
@@ -127,6 +129,10 @@ class MissionConfig(NamedTuple):
     # 最多等這麼久，對應 ros/user_node.py 的 CANCEL_WAIT_SEC）。
     finish_reserve_sec: float = 3.0
     cancel_reserve_sec: float = 5.0
+    # 通知最多等 notify_timeout_sec，而且要在時限前 finish_call_sec 回來（留給完成回報的服務呼叫）。
+    # 正常一次通知不到 1 秒；卡住時（伺服器或網路出問題）不能讓它把完成回報拖過時限（issue #17）。
+    notify_timeout_sec: float = 15.0
+    finish_call_sec: float = 1.0
 
     @property
     def probes_on(self) -> bool:
@@ -140,6 +146,8 @@ DEFAULT_MISSION = MissionConfig()
 
 # 逾時比這個還短的移動不送：一定來不及，只會多花一次取消的時間。
 MIN_MOVE_TIMEOUT_SEC = 1.0
+# 逾時比這個還短的通知不送：來回一次至少要這麼久。
+MIN_NOTIFY_TIMEOUT_SEC = 0.2
 
 
 class Settled(NamedTuple):
@@ -403,12 +411,20 @@ class _Run:
         return False
 
     def notify(self, cp: Checkpoint) -> bool:
+        """回報通過，最多試 notify_attempts 次；每一次都不越過「時限前 finish_call_sec」，
+        沒有時間了就不送（Goal 沒回報到也沒關係：完成回報時官方會再判一次）。"""
         for attempt in range(self.cfg.notify_attempts):
-            if self.robot.notify_checkpoint(cp.id):
+            pause = self.cfg.settle_interval_sec if attempt else 0.0  # 重試前先停一下
+            spare = self.remaining() - pause - self.cfg.finish_call_sec
+            timeout = min(self.cfg.notify_timeout_sec, spare)
+            if timeout < MIN_NOTIFY_TIMEOUT_SEC:
+                self.log("no time left to notify #%d" % cp.id)
+                return False
+            self.robot.sleep(pause)
+            if self.robot.notify_checkpoint(cp.id, timeout):
                 self.log("checkpoint #%d accepted" % cp.id)
                 return True
             self.log("checkpoint #%d rejected (attempt %d)" % (cp.id, attempt + 1))
-            self.robot.sleep(self.cfg.settle_interval_sec)
         return False
 
     def describe(self, cp: Checkpoint, settled: Settled) -> str:
@@ -456,6 +472,8 @@ class _Run:
         在開啟相機修正之前，先用這行 log 累積資料。任何失敗都只記一行。"""
         if not self.cfg.log_marker or self.last_pose is None:
             return
+        if self.remaining() < self.cfg.finish_reserve_sec:
+            return  # 影像處理沒有時間上限；快到時限就不做，完成回報優先
         try:
             observed = self.robot.marker_in_body(cp.id)
         except Exception as exc:  # 診斷碼不能讓任務出事

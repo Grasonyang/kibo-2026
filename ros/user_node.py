@@ -73,8 +73,8 @@ SERVICE_TIMEOUT_SEC = 10.0  # 等服務出現，以及等它回應，各自的�
 SERVICE_POLL_SEC = 0.05
 SERVICE_MAX_POLLS = int(SERVICE_TIMEOUT_SEC / SERVICE_POLL_SEC) + 2
 ACTION_SERVER_TIMEOUT_SEC = 10.0
-NOTIFY_TIMEOUT_SEC = 15.0
 CANCEL_WAIT_SEC = 5.0
+MIN_WAIT_SEC = 0.05  # actionlib 的等待給 0 秒代表無限期；任何等待最少給這麼多
 NAV_FRESH_SEC = 1.0  # 導航資料比這舊就當作沒有
 NAV_HISTORY_STEP_SEC = 0.05  # 導航實測約 200 Hz；紀錄降到 20 Hz 就夠判斷「到點前最後 1 秒」
 NAV_HISTORY_LEN = 64  # 20 Hz x 64 筆，約 3 秒
@@ -142,14 +142,15 @@ class RosRobot(Robot):
         return self._navlog.recent(rospy.get_time(), seconds)
 
     def move_to(self, target, timeout_sec):
-        if not self._command.wait_for_server(rospy.Duration(ACTION_SERVER_TIMEOUT_SEC)):
+        left = self._wait_for_action_server(self._command, timeout_sec)
+        if left is None:
             rospy.logerr("/ctl/command server unavailable")
             return MOVE_ABORTED
         goal = CtlCommandGoal(
             target=self._pose_stamped(target),
             type=CtlStatusType(type=CtlStatusType.MOVE_TO_ABSOLUTE_TARGET),
         )
-        status, result = self._run_action(self._command, goal, timeout_sec)
+        status, result = self._run_action(self._command, goal, left)
         rospy.loginfo(
             "move_to done: status=%s result=%s ctl_status=%s",
             status,
@@ -173,12 +174,15 @@ class RosRobot(Robot):
             return None
         return res.message
 
-    def notify_checkpoint(self, checkpoint_id):
-        if not self._checkpoint.wait_for_server(rospy.Duration(ACTION_SERVER_TIMEOUT_SEC)):
+    def notify_checkpoint(self, checkpoint_id, timeout_sec):
+        left = self._wait_for_action_server(self._checkpoint, timeout_sec)
+        if left is None:
             rospy.logerr("/event/checkpoint_passed server unavailable")
             return False
         goal = CheckpointPassedGoal(checkpoint_id=checkpoint_id)
-        status, result = self._run_action(self._checkpoint, goal, NOTIFY_TIMEOUT_SEC)
+        # 逾時就送出取消、不等它的回應：通知不像移動，沒有「要等機器人停下來」這回事，
+        # 而任務層給的 timeout_sec 已經貼著完成回報要用的時間。
+        status, result = self._run_action(self._checkpoint, goal, left, cancel_wait_sec=0.0)
         if status != ACTION_DONE or result is None:
             rospy.logwarn("checkpoint_passed #%d: %s", checkpoint_id, status)
             return False
@@ -207,7 +211,8 @@ class RosRobot(Robot):
         return observation.position_body if observation else None
 
     def move_relative(self, delta, timeout_sec):
-        if not self._command.wait_for_server(rospy.Duration(ACTION_SERVER_TIMEOUT_SEC)):
+        left = self._wait_for_action_server(self._command, timeout_sec)
+        if left is None:
             return MOVE_ABORTED
         target = PoseStamped()
         target.header.stamp = rospy.Time.now()
@@ -217,7 +222,7 @@ class RosRobot(Robot):
         goal = CtlCommandGoal(
             target=target, type=CtlStatusType(type=CtlStatusType.MOVE_TO_RELATIVE_TARGET)
         )
-        status, result = self._run_action(self._command, goal, timeout_sec)
+        status, result = self._run_action(self._command, goal, left)
         return move_outcome(status, getattr(result, "type", None))
 
     # ---- 給節點用 ----
@@ -459,8 +464,20 @@ class RosRobot(Robot):
             rospy.logwarn("%s took %.1fs", name, waited)
         return box.get("result")
 
-    def _run_action(self, client, goal, timeout_sec):
-        """送出 goal，輪詢到完成、逾時或停止；逾時與停止都會取消。
+    @staticmethod
+    def _wait_for_action_server(client, timeout_sec):
+        """等 action server 出現，最多 ACTION_SERVER_TIMEOUT_SEC，而且算在 timeout_sec 裡。
+        回傳 timeout_sec 還剩幾秒；等不到回 None。"""
+        began = rospy.get_time()
+        # actionlib 把 0 秒當成「無限期等」，所以最少給一點點
+        patience = max(MIN_WAIT_SEC, min(ACTION_SERVER_TIMEOUT_SEC, timeout_sec))
+        if not client.wait_for_server(rospy.Duration(patience)):
+            return None
+        return max(0.0, timeout_sec - (rospy.get_time() - began))
+
+    def _run_action(self, client, goal, timeout_sec, cancel_wait_sec=CANCEL_WAIT_SEC):
+        """送出 goal，輪詢到完成、逾時或停止；逾時與停止都會取消，再等取消的結果最多
+        cancel_wait_sec（0 = 不等）。
 
         回傳 (狀態, result)。狀態是 ACTION_DONE、ACTION_TIMEOUT 或 ACTION_STOPPED；
         goal 被拒絕時狀態是 ACTION_DONE 但 result 為 None。
@@ -480,7 +497,8 @@ class RosRobot(Robot):
                     break
             # 走到這裡有三種：收到停止、過了期限、輪詢次數用完。後兩種都是逾時。
             client.cancel_goal()
-            client.wait_for_result(rospy.Duration(CANCEL_WAIT_SEC))
+            if cancel_wait_sec > 0.0:
+                client.wait_for_result(rospy.Duration(cancel_wait_sec))
             return (ACTION_STOPPED if self.stop_requested() else ACTION_TIMEOUT), None
         finally:
             with self._active_lock:

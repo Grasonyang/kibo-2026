@@ -50,7 +50,7 @@ class SecondTryRobot(OffsetRobot):
 class RejectingRobot(FakeRobot):
     notify_calls = 0
 
-    def notify_checkpoint(self, checkpoint_id):
+    def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
         self.notify_calls += 1
         return False
 
@@ -69,8 +69,8 @@ class TimeoutMoveRobot(FakeRobot):
 
 
 class StopAfterFirstRobot(FakeRobot):
-    def notify_checkpoint(self, checkpoint_id):
-        accepted = super().notify_checkpoint(checkpoint_id)
+    def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
+        accepted = super().notify_checkpoint(checkpoint_id, timeout_sec)
         self.stop = True
         return accepted
 
@@ -272,15 +272,15 @@ class StillTurningRobot(FakeRobot):
             return Pose(pose.position, rolled, stamp=pose.stamp)
         return pose
 
-    def notify_checkpoint(self, checkpoint_id):
+    def notify_checkpoint(self, checkpoint_id, timeout_sec=float("inf")):
         # 假裁判用的是真實姿態；把「還在轉」也反映進去
         if self.t < self.turning_until:
             truth, self.true_pose = self.true_pose, self.pose()
             try:
-                return super().notify_checkpoint(checkpoint_id)
+                return super().notify_checkpoint(checkpoint_id, timeout_sec)
             finally:
                 self.true_pose = truth
-        return super().notify_checkpoint(checkpoint_id)
+        return super().notify_checkpoint(checkpoint_id, timeout_sec)
 
 
 def _realistic_message():
